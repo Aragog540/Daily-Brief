@@ -1,5 +1,35 @@
 # Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv
+/.venv*/
+backend/.venv*/
+
+# Packages
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Vite / build
+dist/
+
+# Env files
+.env
+*.env
+
+# OS
+.DS_Store
+# Python
+__pycache__/
 *.pyc
 *.pyo
 .venv/
