@@ -350,7 +350,14 @@ async def generate_brief(req: BriefRequest):
             if msg.tool_calls:
                 for tc in msg.tool_calls:
                     fn_name = tc.function.name
-                    fn_args = json.loads(tc.function.arguments)
+                    raw_args = tc.function.arguments or "{}"
+                    try:
+                        fn_args = json.loads(raw_args)
+                    except Exception:
+                        fn_args = {}
+
+                    if not isinstance(fn_args, dict):
+                        fn_args = {}
 
                     # Send trace event to frontend
                     trace = json.dumps({
@@ -361,7 +368,14 @@ async def generate_brief(req: BriefRequest):
                     yield f"data: {trace}\n\n"
 
                     # Execute the tool
-                    result = TOOL_MAP[fn_name](**fn_args)
+                    tool = TOOL_MAP.get(fn_name)
+                    if tool is None:
+                        result = {"error": f"Unknown tool: {fn_name}"}
+                    else:
+                        try:
+                            result = tool(**fn_args)
+                        except TypeError:
+                            result = tool()
 
                     # Send result trace
                     result_trace = json.dumps({
