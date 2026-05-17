@@ -51,9 +51,16 @@ export default function BriefOutput({ content, structured, weather, onReset }) {
   });
   flushBullets();
 
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const dateStr = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+  // Prefer weather-provided current_time for the generated timestamp (falls back to local now)
+  let localDt = null;
+  if (weather && weather.current_time) {
+    // ISO string from backend; construct Date. Browser will interpret missing offset as local.
+    localDt = new Date(weather.current_time);
+    if (isNaN(localDt.getTime())) localDt = null;
+  }
+  if (!localDt) localDt = new Date();
+  const timeStr = localDt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dateStr = localDt.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
 
   return (
     <div className="brief-card">
@@ -67,7 +74,21 @@ export default function BriefOutput({ content, structured, weather, onReset }) {
       <div className="brief-content">
         {weather ? (
           <div className="brief-weather">
-            <div className="brief-weather-summary">{weather.summary || `${weather.city || ''} ${weather.temp_c ? weather.temp_c + '°C' : ''} ${weather.condition || ''}`}</div>
+            {/* time-aware summary: if night, prefer Tonight/Tomorrow phrasing */}
+            {(() => {
+              const dt = localDt;
+              const hour = dt.getHours();
+              const max = weather.max_temp_c;
+              const min = weather.min_temp_c;
+              if ((hour < 6 || hour >= 20) && min != null && max != null) {
+                return (
+                  <div className="brief-weather-summary">{`Tonight: lows around ${min}°C. Tomorrow expect highs near ${max}°C.`}</div>
+                );
+              }
+              // default: show current temp + short condition, or summary
+              const simple = weather.summary || `${weather.city || ''} ${weather.temp_c ? weather.temp_c + '°C' : ''} ${weather.condition || ''}`;
+              return <div className="brief-weather-summary">{simple}</div>;
+            })()}
             {weather.advice && weather.advice.length > 0 && (
               <ul className="brief-weather-advice">
                 {weather.advice.map((a, idx) => (
