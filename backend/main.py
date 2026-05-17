@@ -287,6 +287,11 @@ def _rewrite_brief(req, user_message: str, draft: str, messages) -> str:
     return rewritten if rewritten else _fallback_brief(req)
 
 
+def _has_news_content(text: str, interests: list[str]) -> bool:
+    lower = text.lower()
+    return any(topic.lower() in lower for topic in interests)
+
+
 # ── Request model ─────────────────────────────────────────────────────────────
 
 class BriefRequest(BaseModel):
@@ -405,7 +410,12 @@ async def generate_brief(req: BriefRequest):
                 if _needs_rewrite(final_text):
                     final_text = _rewrite_brief(req, user_message, final_text, messages)
 
-                if _needs_rewrite(final_text):
+                if not _has_news_content(final_text, req.interests):
+                    assembled = _assemble_brief_from_tools(req, messages)
+                    if assembled:
+                        final_text = assembled
+
+                if _needs_rewrite(final_text) or not _has_news_content(final_text, req.interests):
                     final_text = _fallback_brief(req)
 
                 final = json.dumps({"type": "brief", "content": final_text})
