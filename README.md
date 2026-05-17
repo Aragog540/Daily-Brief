@@ -146,7 +146,7 @@ Open [http://localhost:5173](http://localhost:5173)
 3. Connect this repository.
 4. Set the root directory to the repository root, not `backend` or `frontend`.
 5. Use these commands:
-    - Build: `pip install --upgrade pip setuptools wheel && pip install -r backend/requirements.txt && cd frontend && npm ci && npm run build`
+    - Build: `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && cd frontend && npm ci && npm run build`
     - Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
 6. Add these environment variables in Render:
     - `GROQ_API_KEY`
