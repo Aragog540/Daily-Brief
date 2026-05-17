@@ -65,7 +65,6 @@ dailybrief/
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
-├── render.yaml              # Optional Render service config
 ├── .gitignore
 └── README.md
 ```
