@@ -134,8 +134,8 @@ def get_weather(city: str) -> dict:
         resp = getattr(e, "response", None)
         status = getattr(resp, "status_code", None)
         if status == 401:
+            # Try current weather endpoint first
             try:
-                # fallback to /data/2.5/weather which may still return limited info for some keys
                 url = f"https://api.openweathermap.org/data/2.5/weather?q={urllib.parse.quote(city)}&appid={WEATHER_API_KEY}&units=metric"
                 r = httpx.get(url, timeout=8)
                 if r.status_code == 200:
@@ -150,8 +150,59 @@ def get_weather(city: str) -> dict:
                         "summary": f"{city} weather unavailable from detailed API; current conditions are {((data.get('weather') or [{}])[0].get('description','')).strip()}.",
                         "advice": ["Weather data is limited; check local forecasts if you need precise timing."],
                     }
-                else:
-                    return {"error": "weather_unavailable"}
+            except Exception:
+                pass
+
+            # Fall back to Open-Meteo (no API key required) using lat/lon
+            try:
+                om_url = (
+                    f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto"
+                )
+                om = httpx.get(om_url, timeout=8)
+                om.raise_for_status()
+                omd = om.json()
+                daily = omd.get("daily", {})
+                maxs = daily.get("temperature_2m_max", [])
+                mins = daily.get("temperature_2m_min", [])
+                pops = daily.get("precipitation_probability_max", [])
+                max_temp = round(maxs[0]) if maxs else None
+                min_temp = round(mins[0]) if mins else None
+                pop = pops[0] / 100.0 if pops else None
+
+                summary_parts = []
+                if max_temp is not None and min_temp is not None:
+                    if max_temp >= 42:
+                        summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
+                    else:
+                        summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
+
+                if pop is not None:
+                    if pop >= 0.5:
+                        summary_parts.append("with a good chance of rain today")
+                    elif pop >= 0.2:
+                        summary_parts.append("with some chance of showers")
+                    else:
+                        summary_parts.append("with very little chance of rain")
+
+                summary = ", ".join(summary_parts).strip().capitalize() + "."
+                advice = ["Stay hydrated", "Use light clothing and sunscreen"]
+                if max_temp and max_temp >= 40:
+                    advice = ["Avoid direct sun between 12 PM – 4 PM", "Stay hydrated", "Use light cotton clothes and sunscreen", "Limit strenuous outdoor activity"]
+
+                return {
+                    "city": city,
+                    "temp_c": None,
+                    "feels_like_c": None,
+                    "condition": "",
+                    "humidity": None,
+                    "wind_kph": None,
+                    "max_temp_c": max_temp,
+                    "min_temp_c": min_temp,
+                    "day_condition": "",
+                    "summary": summary,
+                    "advice": advice,
+                }
             except Exception:
                 return {"error": "weather_unavailable"}
         return {"error": "weather_unavailable"}
@@ -182,6 +233,11 @@ def search_news(topic: str, count: int = 3) -> dict:
             pub_date = (item.findtext("pubDate") or "").strip()
             if not title:
                 continue
+            # Clean up titles that include a trailing ' - SOURCE' to avoid duplicate source display
+            suffix = f" - {source}"
+            if title.endswith(suffix):
+                title = title[: -len(suffix)].strip()
+
             articles.append({
                 "title": title,
                 "source": source,
