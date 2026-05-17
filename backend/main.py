@@ -24,6 +24,7 @@ app.add_middleware(
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 WEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
+USE_OPEN_METEO = os.environ.get("USE_OPEN_METEO", "false").lower() in ("1", "true", "yes")
 NEWS_COUNTRY = "IN"
 GOOGLE_NEWS_HL = "en-IN"
 GOOGLE_NEWS_CEID = "IN:en"
@@ -31,12 +32,77 @@ GOOGLE_NEWS_CEID = "IN:en"
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 def get_weather(city: str) -> dict:
-    # Enhanced weather: try to fetch forecasted daily highs/lows using One Call via geocoding.
+    # Enhanced weather: prefer Open-Meteo when configured, otherwise use OpenWeather One Call
     try:
+        # Prefer Open-Meteo (no API key) when requested
+        if USE_OPEN_METEO:
+            # Geocode via Open-Meteo's geocoding API (no key required)
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(city)}&count=1&language=en&format=json"
+            g = httpx.get(geo_url, timeout=8)
+            g.raise_for_status()
+            geoj = g.json() or {}
+            results = geoj.get("results", [])
+            if not results:
+                return {"error": f"Could not geocode {city}"}
+            lat = results[0]["latitude"]
+            lon = results[0]["longitude"]
+            name = results[0].get("name", city)
+
+            # Call Open-Meteo forecast
+            om_url = (
+                f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto"
+            )
+            om = httpx.get(om_url, timeout=8)
+            om.raise_for_status()
+            omd = om.json()
+            daily = omd.get("daily", {})
+            maxs = daily.get("temperature_2m_max", [])
+            mins = daily.get("temperature_2m_min", [])
+            pops = daily.get("precipitation_probability_max", [])
+            max_temp = round(maxs[0]) if maxs else None
+            min_temp = round(mins[0]) if mins else None
+            pop = pops[0] / 100.0 if pops else None
+
+            summary_parts = []
+            if max_temp is not None and min_temp is not None:
+                if max_temp >= 42:
+                    summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
+                else:
+                    summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
+
+            if pop is not None:
+                if pop >= 0.5:
+                    summary_parts.append("with a good chance of rain today")
+                elif pop >= 0.2:
+                    summary_parts.append("with some chance of showers")
+                else:
+                    summary_parts.append("with very little chance of rain")
+
+            summary = ", ".join(summary_parts).strip().capitalize() + "."
+            advice = ["Stay hydrated", "Use light clothing and sunscreen"]
+            if max_temp and max_temp >= 40:
+                advice = ["Avoid direct sun between 12 PM – 4 PM", "Stay hydrated", "Use light cotton clothes and sunscreen", "Limit strenuous outdoor activity"]
+
+            return {
+                "city": name,
+                "temp_c": None,
+                "feels_like_c": None,
+                "condition": "",
+                "humidity": None,
+                "wind_kph": None,
+                "max_temp_c": max_temp,
+                "min_temp_c": min_temp,
+                "day_condition": "",
+                "summary": summary,
+                "advice": advice,
+            }
+
+        # Otherwise use OpenWeather (requires API key)
         if not WEATHER_API_KEY:
             return {"error": "OPENWEATHER_API_KEY not set"}
 
-        # 1) geocode city to lat/lon
+        # 1) geocode city to lat/lon via OpenWeather
         geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={urllib.parse.quote(city)}&limit=1&appid={WEATHER_API_KEY}"
         g = httpx.get(geo_url, timeout=8)
         g.raise_for_status()
