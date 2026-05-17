@@ -31,19 +31,103 @@ GOOGLE_NEWS_CEID = "IN:en"
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 def get_weather(city: str) -> dict:
+    # Enhanced weather: try to fetch forecasted daily highs/lows using One Call via geocoding.
     try:
-        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
-        r = httpx.get(url, timeout=8)
-        data = r.json()
-        if r.status_code != 200:
-            return {"error": f"Could not fetch weather for {city}"}
+        if not WEATHER_API_KEY:
+            return {"error": "OPENWEATHER_API_KEY not set"}
+
+        # 1) geocode city to lat/lon
+        geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={urllib.parse.quote(city)}&limit=1&appid={WEATHER_API_KEY}"
+        g = httpx.get(geo_url, timeout=8)
+        g.raise_for_status()
+        geo = g.json() or []
+        if not geo:
+            return {"error": f"Could not geocode {city}"}
+        lat = geo[0]["lat"]
+        lon = geo[0]["lon"]
+        name = geo[0].get("name", city)
+
+        # 2) onecall for daily forecast
+        one_url = (
+            f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}"
+            f"&exclude=minutely,hourly,alerts&units=metric&appid={WEATHER_API_KEY}"
+        )
+        o = httpx.get(one_url, timeout=8)
+        o.raise_for_status()
+        od = o.json()
+
+        current = od.get("current", {})
+        daily = od.get("daily", [])
+        today = daily[0] if daily else {}
+
+        temp_now = round(current.get("temp")) if current.get("temp") is not None else None
+        feels = round(current.get("feels_like")) if current.get("feels_like") is not None else None
+        cond = (current.get("weather") or [{}])[0].get("description", "")
+
+        max_temp = round(today.get("temp", {}).get("max")) if today.get("temp") else None
+        min_temp = round(today.get("temp", {}).get("min")) if today.get("temp") else None
+        day_weather = (today.get("weather") or [{}])[0].get("description", "")
+
+        # Interpretive summary
+        summary_parts = []
+        if max_temp is not None and min_temp is not None:
+            if max_temp >= 42:
+                summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
+            elif max_temp >= 35:
+                summary_parts.append(f"expected to be very warm, with highs near {max_temp}°C and lows around {min_temp}°C")
+            else:
+                summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
+        elif temp_now is not None:
+            summary_parts.append(f"around {temp_now}°C right now")
+
+        if day_weather:
+            summary_parts.append(f"Skies will likely be {day_weather}")
+
+        # rain chance estimate from pop
+        pop = today.get("pop")
+        if pop is not None:
+            if pop >= 0.5:
+                summary_parts.append("with a good chance of rain today")
+            elif pop >= 0.2:
+                summary_parts.append("with some chance of showers")
+            else:
+                summary_parts.append("with very little chance of rain")
+
+        summary = ", ".join(summary_parts).strip().capitalize() + "."
+
+        # Advice bullets
+        advice = []
+        if max_temp is not None and max_temp >= 40:
+            advice.extend([
+                "Avoid direct sun between 12 PM – 4 PM",
+                "Stay hydrated",
+                "Use light cotton clothes and sunscreen",
+                "Limit strenuous outdoor activity",
+            ])
+        elif max_temp is not None and max_temp >= 30:
+            advice.extend([
+                "Stay hydrated",
+                "Use light clothing and sunscreen",
+                "Take breaks if working outside",
+            ])
+        else:
+            advice.extend([
+                "Dress for the expected temperature",
+                "Carry an umbrella if showers are likely",
+            ])
+
         return {
-            "city": data["name"],
-            "temp_c": round(data["main"]["temp"]),
-            "feels_like_c": round(data["main"]["feels_like"]),
-            "condition": data["weather"][0]["description"],
-            "humidity": data["main"]["humidity"],
-            "wind_kph": round(data["wind"]["speed"] * 3.6),
+            "city": name,
+            "temp_c": temp_now,
+            "feels_like_c": feels,
+            "condition": cond,
+            "humidity": current.get("humidity"),
+            "wind_kph": round(current.get("wind_speed", 0) * 3.6) if current.get("wind_speed") is not None else None,
+            "max_temp_c": max_temp,
+            "min_temp_c": min_temp,
+            "day_condition": day_weather,
+            "summary": summary,
+            "advice": advice,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -336,7 +420,9 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
                 weather = content
                 break
 
-    if weather and weather.get("temp_c") is not None:
+    if weather and weather.get("summary"):
+        greeting = f"Good morning — {weather.get('summary')}\n"
+    elif weather and weather.get("temp_c") is not None:
         greeting = f"Good morning — {city or weather.get('city','your city')} is {weather['temp_c']}°C and {weather.get('condition','clear')}.\n"
     else:
         greeting = f"Good morning — here's your quick brief for {city or 'your city'}.\n"
