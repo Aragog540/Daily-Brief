@@ -56,6 +56,9 @@ def get_weather(city: str) -> dict:
             om = httpx.get(om_url, timeout=8)
             om.raise_for_status()
             omd = om.json()
+            current_weather = omd.get("current_weather", {})
+            curr_temp = round(current_weather.get("temperature")) if current_weather.get("temperature") is not None else None
+            curr_time = current_weather.get("time")
             daily = omd.get("daily", {})
             maxs = daily.get("temperature_2m_max", [])
             mins = daily.get("temperature_2m_min", [])
@@ -86,7 +89,7 @@ def get_weather(city: str) -> dict:
 
             return {
                 "city": name,
-                "temp_c": None,
+                "temp_c": curr_temp,
                 "feels_like_c": None,
                 "condition": "",
                 "humidity": None,
@@ -96,6 +99,7 @@ def get_weather(city: str) -> dict:
                 "day_condition": "",
                 "summary": summary,
                 "advice": advice,
+                "current_time": curr_time,
             }
 
         # Otherwise use OpenWeather (requires API key)
@@ -129,6 +133,16 @@ def get_weather(city: str) -> dict:
         temp_now = round(current.get("temp")) if current.get("temp") is not None else None
         feels = round(current.get("feels_like")) if current.get("feels_like") is not None else None
         cond = (current.get("weather") or [{}])[0].get("description", "")
+        # current local time from API (UTC + timezone_offset)
+        try:
+            tz_off = od.get("timezone_offset", 0) or 0
+            curr_dt = current.get("dt")
+            if curr_dt is not None:
+                current_time = datetime.utcfromtimestamp(curr_dt + tz_off).isoformat()
+            else:
+                current_time = None
+        except Exception:
+            current_time = None
 
         max_temp = round(today.get("temp", {}).get("max")) if today.get("temp") else None
         min_temp = round(today.get("temp", {}).get("min")) if today.get("temp") else None
@@ -194,6 +208,7 @@ def get_weather(city: str) -> dict:
             "day_condition": day_weather,
             "summary": summary,
             "advice": advice,
+            "current_time": current_time,
         }
     except httpx.HTTPStatusError as e:
         # If API key is invalid (401), fall back to the simpler current weather endpoint.
@@ -228,6 +243,9 @@ def get_weather(city: str) -> dict:
                 om = httpx.get(om_url, timeout=8)
                 om.raise_for_status()
                 omd = om.json()
+                current_weather = omd.get("current_weather", {})
+                curr_temp = round(current_weather.get("temperature")) if current_weather.get("temperature") is not None else None
+                curr_time = current_weather.get("time")
                 daily = omd.get("daily", {})
                 maxs = daily.get("temperature_2m_max", [])
                 mins = daily.get("temperature_2m_min", [])
@@ -258,7 +276,7 @@ def get_weather(city: str) -> dict:
 
                 return {
                     "city": city,
-                    "temp_c": None,
+                    "temp_c": curr_temp,
                     "feels_like_c": None,
                     "condition": "",
                     "humidity": None,
@@ -268,6 +286,7 @@ def get_weather(city: str) -> dict:
                     "day_condition": "",
                     "summary": summary,
                     "advice": advice,
+                    "current_time": curr_time,
                 }
             except Exception:
                 return {"error": "weather_unavailable"}
@@ -556,7 +575,7 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
             seen.add(key)
         ci += 1
 
-    # Greeting using any available weather from messages
+    # Greeting using any available weather from messages (time-aware)
     weather = None
     for m in messages:
         if m.get("role") == "tool":
@@ -564,16 +583,61 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
                 content = json.loads(m.get("content") or "{}")
             except Exception:
                 continue
-            if isinstance(content, dict) and ("temp_c" in content or "condition" in content):
+            if isinstance(content, dict) and ("temp_c" in content or "condition" in content or "current_time" in content):
                 weather = content
                 break
 
-    if weather and weather.get("summary"):
-        greeting = f"Good morning — {weather.get('summary')}\n"
-    elif weather and weather.get("temp_c") is not None:
-        greeting = f"Good morning — {city or weather.get('city','your city')} is {weather['temp_c']}°C and {weather.get('condition','clear')}.\n"
+    # Determine local time (prefer weather current_time if available)
+    local_dt = None
+    if weather and weather.get("current_time"):
+        try:
+            local_dt = datetime.fromisoformat(weather.get("current_time"))
+        except Exception:
+            local_dt = None
+    if local_dt is None:
+        local_dt = datetime.now()
+
+    hour = local_dt.hour
+    if 5 <= hour < 12:
+        greeting_word = "Good morning"
+    elif 12 <= hour < 17:
+        greeting_word = "Good afternoon"
+    elif 17 <= hour < 20:
+        greeting_word = "Good evening"
     else:
-        greeting = f"Good morning — here's your quick brief for {city or 'your city'}.\n"
+        # Late night / early morning
+        greeting_word = "Good evening"
+
+    # Compose greeting with current temp if available
+    if weather and weather.get("temp_c") is not None:
+        greeting = f"{greeting_word} — {city or weather.get('city','your city')} is {weather['temp_c']}°C and {weather.get('condition','clear')}.\n"
+    elif weather and weather.get("summary"):
+        greeting = f"{greeting_word} — {weather.get('summary')}\n"
+    else:
+        greeting = f"{greeting_word} — here's your quick brief for {city or 'your city'}.\n"
+
+    # Add generated timestamp (local)
+    gen_time = local_dt.strftime("%I:%M %p").lstrip("0")
+    greeting += f"Generated at {gen_time}\n"
+
+    # Adjust summary wording for night readers: mention tonight/tomorrow when appropriate
+    if weather:
+        max_t = weather.get("max_temp_c")
+        min_t = weather.get("min_temp_c")
+        # If reading at night, prefer 'Tonight'/'Tomorrow' phrasing
+        if hour < 6 or hour >= 20:
+            if min_t is not None and max_t is not None:
+                night_summary = f"Tonight: lows around {min_t}°C. Tomorrow expect highs near {max_t}°C."
+                # prepend to greeting summary area
+                greeting = f"{greeting}\n{night_summary}\n"
+        else:
+            # keep existing weather summary as-is (if provided)
+            if weather.get("summary"):
+                # ensure summary ends with a period
+                s = weather.get("summary").strip()
+                if not s.endswith("."):
+                    s = s + "."
+                greeting = f"{greeting}\n{s}\n"
 
     # Build numbered headlines
     lines = [greeting, ""]
