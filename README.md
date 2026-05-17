@@ -148,12 +148,13 @@ Open [http://localhost:5173](http://localhost:5173)
 5. Use these commands:
     - Build: `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && cd frontend && npm ci && npm run build`
     - Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Add these environment variables in Render:
+6. Make sure Render uses Python 3.12 for this service. The repo includes a root `runtime.txt` for that.
+7. Add these environment variables in Render:
     - `GROQ_API_KEY`
     - `OPENWEATHER_API_KEY`
     - `NEWS_API_KEY`
-7. Deploy.
-8. Open the service URL when the deploy finishes. The FastAPI app serves both the API and the built React frontend.
+8. Deploy.
+9. Open the service URL when the deploy finishes. The FastAPI app serves both the API and the built React frontend.
 
 ### Render notes
 
