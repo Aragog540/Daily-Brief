@@ -129,8 +129,34 @@ def get_weather(city: str) -> dict:
             "summary": summary,
             "advice": advice,
         }
-    except Exception as e:
-        return {"error": str(e)}
+    except httpx.HTTPStatusError as e:
+        # If API key is invalid (401), fall back to the simpler current weather endpoint.
+        resp = getattr(e, "response", None)
+        status = getattr(resp, "status_code", None)
+        if status == 401:
+            try:
+                # fallback to /data/2.5/weather which may still return limited info for some keys
+                url = f"https://api.openweathermap.org/data/2.5/weather?q={urllib.parse.quote(city)}&appid={WEATHER_API_KEY}&units=metric"
+                r = httpx.get(url, timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    return {
+                        "city": data.get("name", city),
+                        "temp_c": round(data.get("main", {}).get("temp")) if data.get("main") else None,
+                        "feels_like_c": round(data.get("main", {}).get("feels_like")) if data.get("main") else None,
+                        "condition": (data.get("weather") or [{}])[0].get("description", ""),
+                        "humidity": data.get("main", {}).get("humidity"),
+                        "wind_kph": round(data.get("wind", {}).get("speed", 0) * 3.6) if data.get("wind") else None,
+                        "summary": f"{city} weather unavailable from detailed API; current conditions are {((data.get('weather') or [{}])[0].get('description','')).strip()}.",
+                        "advice": ["Weather data is limited; check local forecasts if you need precise timing."],
+                    }
+                else:
+                    return {"error": "weather_unavailable"}
+            except Exception:
+                return {"error": "weather_unavailable"}
+        return {"error": "weather_unavailable"}
+    except Exception:
+        return {"error": "weather_unavailable"}
 
 
 def search_news(topic: str, count: int = 3) -> dict:
