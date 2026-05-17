@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import urllib.parse
+import xml.etree.ElementTree as ET
 import httpx
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +24,9 @@ app.add_middleware(
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 WEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+NEWS_COUNTRY = "IN"
+GOOGLE_NEWS_HL = "en-IN"
+GOOGLE_NEWS_CEID = "IN:en"
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
@@ -47,25 +51,35 @@ def get_weather(city: str) -> dict:
 
 def search_news(topic: str, count: int = 3) -> dict:
     try:
+        encoded_topic = urllib.parse.quote(topic)
         url = (
-            f"https://newsapi.org/v2/everything?q={topic}"
-            f"&sortBy=publishedAt&pageSize={count}&language=en&apiKey={NEWS_API_KEY}"
+            "https://news.google.com/rss/search?q="
+            f"{encoded_topic}%20when%3A1d&hl={GOOGLE_NEWS_HL}&gl={NEWS_COUNTRY}&ceid={GOOGLE_NEWS_CEID}"
         )
-        r = httpx.get(url, timeout=8)
-        data = r.json()
-        if data.get("status") != "ok":
-            return {"error": "News fetch failed", "details": data.get("message")}
-        articles = [
-            {
-                "title": a["title"],
-                "source": a["source"]["name"],
-                "url": a["url"],
-                "published": a["publishedAt"][:10],
-            }
-            for a in data.get("articles", [])[:count]
-            if a.get("title") and "[Removed]" not in a.get("title", "")
-        ]
-        return {"topic": topic, "articles": articles}
+        r = httpx.get(url, timeout=8, follow_redirects=True)
+        r.raise_for_status()
+
+        root = ET.fromstring(r.text)
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else []
+
+        articles = []
+        for item in items[:count]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            source_el = item.find("source")
+            source = (source_el.text or "Google News") if source_el is not None else "Google News"
+            pub_date = (item.findtext("pubDate") or "").strip()
+            if not title:
+                continue
+            articles.append({
+                "title": title,
+                "source": source,
+                "url": link,
+                "published": pub_date[:16] if pub_date else "",
+            })
+
+        return {"topic": topic, "articles": articles, "source": "google_news_rss", "country": NEWS_COUNTRY}
     except Exception as e:
         return {"error": str(e)}
 
@@ -244,7 +258,10 @@ def _assemble_brief_from_tools(req, messages) -> str:
     while len(bullets) < 3:
         bullets.append("- No further updates.")
 
-    thought = f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship." 
+    if not any(line.startswith("-") and "no major updates" not in line.lower() for line in bullets):
+        return ""
+
+    thought = f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship."
 
     assembled = "\n".join([greeting, "", *bullets, "", thought])
     return assembled
@@ -308,10 +325,11 @@ async def generate_brief(req: BriefRequest):
     system_prompt = (
         "You are a sharp, warm morning briefing agent. "
         "Use the available tools to gather context, then write a personalized morning brief. "
+        "The news scope is India only. Use India-only news results and do not mention other regions. "
         "You MUST do this exactly:\n"
         "1. Call get_day_context first.\n"
         "2. Call get_weather with the user's city.\n"
-        "3. Call search_news once for each interest, up to 3 total.\n"
+        "3. Call search_news once for each interest, up to 3 total, using India-only news.\n"
         "4. After tool calls finish, write the final brief.\n\n"
         "Hard rules:\n"
         "- Use only facts from the tools and user input. Do not invent products, quotes, or side topics.\n"
@@ -407,13 +425,11 @@ async def generate_brief(req: BriefRequest):
             # Final text response
             if finish_reason == "stop" and msg.content:
                 final_text = _clean_brief_text(msg.content)
-                if _needs_rewrite(final_text):
+                assembled = _assemble_brief_from_tools(req, messages)
+                if assembled:
+                    final_text = assembled
+                elif _needs_rewrite(final_text):
                     final_text = _rewrite_brief(req, user_message, final_text, messages)
-
-                if not _has_news_content(final_text, req.interests):
-                    assembled = _assemble_brief_from_tools(req, messages)
-                    if assembled:
-                        final_text = assembled
 
                 if _needs_rewrite(final_text) or not _has_news_content(final_text, req.interests):
                     final_text = _fallback_brief(req)

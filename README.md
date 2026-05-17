@@ -9,7 +9,7 @@ DailyBrief asks for your city, interests, and what you’re focused on, then use
 - Backend: FastAPI
 - Frontend: React + Vite
 - LLM: Groq `llama-3.1-8b-instant`
-- APIs: OpenWeatherMap, NewsAPI
+- APIs: OpenWeatherMap, Google News RSS
 - Deploy: Render Web Service
 
 ## Local Setup
@@ -40,12 +40,13 @@ Open [http://localhost:5173](http://localhost:5173).
 2. Set the root directory to the repo root.
 3. Use this build command: `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && cd frontend && npm ci && npm run build`
 4. Use this start command: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Add `GROQ_API_KEY`, `OPENWEATHER_API_KEY`, and `NEWS_API_KEY`.
+5. Add `GROQ_API_KEY` and `OPENWEATHER_API_KEY`.
 6. Deploy.
 
 ## Notes
 
 - The app serves both the API and the frontend from the FastAPI backend.
+- News comes from Google News RSS and is scoped to India.
 - The repo pins Python 3.14 in `runtime.txt`.
 - You do not need `VITE_API_URL` for the single-service setup.
 
