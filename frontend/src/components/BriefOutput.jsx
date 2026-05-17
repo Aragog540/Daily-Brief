@@ -1,4 +1,4 @@
-export default function BriefOutput({ content, structured, onReset }) {
+export default function BriefOutput({ content, structured, weather, onReset }) {
   // Simple markdown-ish renderer: bullet lines and normal lines
   const lines = content.split("\n").filter((l) => l.trim());
 
@@ -65,13 +65,25 @@ export default function BriefOutput({ content, structured, onReset }) {
       <div className="brief-divider" />
 
       <div className="brief-content">
+        {weather ? (
+          <div className="brief-weather">
+            <div className="brief-weather-summary">{weather.summary || `${weather.city || ''} ${weather.temp_c ? weather.temp_c + '°C' : ''} ${weather.condition || ''}`}</div>
+            {weather.advice && weather.advice.length > 0 && (
+              <ul className="brief-weather-advice">
+                {weather.advice.map((a, idx) => (
+                  <li key={idx} className="brief-advice">{a}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
+
         {structured && structured.length > 0 ? (
           <ol className="brief-ol">
             {structured.map((it, i) => (
               <li key={i} className="brief-item">
-                <a href={it.url} target="_blank" rel="noopener noreferrer" className="brief-link">
-                  {it.title}
-                </a>
+                <span className="brief-title">{it.title}</span>
+                <a href={it.url} target="_blank" rel="noopener noreferrer" className="brief-link-mini">🔗</a>
                 <div className="brief-src">{it.source} {it.published ? `· ${it.published}` : ""}</div>
               </li>
             ))}

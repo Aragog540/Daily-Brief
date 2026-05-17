@@ -9,6 +9,7 @@ export default function App() {
   const [traceEvents, setTraceEvents] = useState([]);
   const [brief, setBrief] = useState("");
   const [briefStructured, setBriefStructured] = useState([]);
+  const [weather, setWeather] = useState(null);
   const [error, setError] = useState("");
 
   const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
@@ -54,6 +55,9 @@ export default function App() {
             const event = JSON.parse(raw);
             if (event.type === "tool_call" || event.type === "tool_result") {
               setTraceEvents((prev) => [...prev, event]);
+              if (event.type === "tool_result" && event.tool === "get_weather") {
+                setWeather(event.result || null);
+              }
               } else if (event.type === "brief_structured") {
                 setBriefStructured(event.items || []);
               } else if (event.type === "brief") {
@@ -79,6 +83,7 @@ export default function App() {
     setTraceEvents([]);
     setBrief("");
     setBriefStructured([]);
+    setWeather(null);
     setError("");
   };
 
@@ -104,7 +109,7 @@ export default function App() {
         {(phase === "running" || phase === "done") && (
           <div className="workspace">
             <AgentTrace events={traceEvents} isRunning={phase === "running"} />
-            {brief && <BriefOutput content={brief} structured={briefStructured} onReset={reset} />}
+            {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
           </div>
         )}
 
