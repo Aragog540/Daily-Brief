@@ -17,6 +17,7 @@ export default function App() {
     setPhase("running");
     setTraceEvents([]);
     setBrief("");
+    setBriefStructured([]);
     setError("");
 
     try {
@@ -77,6 +78,7 @@ export default function App() {
     setPhase("idle");
     setTraceEvents([]);
     setBrief("");
+    setBriefStructured([]);
     setError("");
   };
 
@@ -102,7 +104,7 @@ export default function App() {
         {(phase === "running" || phase === "done") && (
           <div className="workspace">
             <AgentTrace events={traceEvents} isRunning={phase === "running"} />
-            {brief && <BriefOutput content={brief} onReset={reset} />}
+            {brief && <BriefOutput content={brief} structured={briefStructured} onReset={reset} />}
           </div>
         )}
 
