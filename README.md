@@ -146,9 +146,9 @@ Open [http://localhost:5173](http://localhost:5173)
 3. Connect this repository.
 4. Set the root directory to the repository root, not `backend` or `frontend`.
 5. Use these commands:
-    - Build: `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && cd frontend && npm ci && npm run build`
+    - Build: `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install --upgrade pip setuptools wheel && PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install -r requirements.txt && cd frontend && npm ci && npm run build`
     - Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Make sure Render uses Python 3.12 for this service. The repo includes a root `runtime.txt` for that.
+6. If Render still uses Python 3.14, keep the build command above exactly as written; it enables PyO3's ABI3 fallback.
 7. Add these environment variables in Render:
     - `GROQ_API_KEY`
     - `OPENWEATHER_API_KEY`
