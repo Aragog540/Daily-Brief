@@ -8,6 +8,7 @@ export default function App() {
   const [phase, setPhase] = useState("idle"); // idle | running | done | error
   const [traceEvents, setTraceEvents] = useState([]);
   const [brief, setBrief] = useState("");
+  const [briefStructured, setBriefStructured] = useState([]);
   const [error, setError] = useState("");
 
   const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
@@ -48,13 +49,15 @@ export default function App() {
           const raw = line.slice(6).trim();
           if (!raw) continue;
 
-          try {
+            try {
             const event = JSON.parse(raw);
             if (event.type === "tool_call" || event.type === "tool_result") {
               setTraceEvents((prev) => [...prev, event]);
-            } else if (event.type === "brief") {
-              setBrief(event.content);
-              setPhase("done");
+              } else if (event.type === "brief_structured") {
+                setBriefStructured(event.items || []);
+              } else if (event.type === "brief") {
+                setBrief(event.content);
+                setPhase("done");
             } else if (event.type === "error") {
               setError(event.message);
               setPhase("error");

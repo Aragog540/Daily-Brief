@@ -1,4 +1,4 @@
-export default function BriefOutput({ content, onReset }) {
+export default function BriefOutput({ content, structured, onReset }) {
   // Simple markdown-ish renderer: bullet lines and normal lines
   const lines = content.split("\n").filter((l) => l.trim());
 
@@ -64,7 +64,22 @@ export default function BriefOutput({ content, onReset }) {
 
       <div className="brief-divider" />
 
-      <div className="brief-content">{rendered}</div>
+      <div className="brief-content">
+        {structured && structured.length > 0 ? (
+          <ol className="brief-ol">
+            {structured.map((it, i) => (
+              <li key={i} className="brief-item">
+                <a href={it.url} target="_blank" rel="noopener noreferrer" className="brief-link">
+                  {it.title}
+                </a>
+                <div className="brief-src">{it.source} {it.published ? `· ${it.published}` : ""}</div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          rendered
+        )}
+      </div>
 
       <div className="brief-divider" />
 

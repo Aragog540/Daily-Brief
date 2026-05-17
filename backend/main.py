@@ -217,54 +217,150 @@ def _fallback_brief(req) -> str:
     )
 
 
-def _assemble_brief_from_tools(req, messages) -> str:
-    # Extract latest tool results for weather and each interest
+def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
+    # New behavior: produce a top-20 headlines list prioritizing local (city) then country,
+    # and include up to 2 articles per user interest inside the top-20 (replace tail items if needed).
+
+    def _parse_rss_items(text, count):
+        try:
+            root = ET.fromstring(text)
+        except Exception:
+            return []
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else []
+        out = []
+        for item in items[:count]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            source_el = item.find("source")
+            source = (source_el.text or "Google News") if source_el is not None else "Google News"
+            pub_date = (item.findtext("pubDate") or "").strip()
+            if not title:
+                continue
+            out.append({"title": title, "url": link, "source": source, "published": pub_date[:16] if pub_date else ""})
+        return out
+
+    def fetch_local_headlines(city, count=20):
+        if not city:
+            return []
+        q = urllib.parse.quote(f"{city} when:1d")
+        url = f"https://news.google.com/rss/search?q={q}&hl={GOOGLE_NEWS_HL}&gl={NEWS_COUNTRY}&ceid={GOOGLE_NEWS_CEID}"
+        try:
+            r = httpx.get(url, timeout=8, follow_redirects=True)
+            r.raise_for_status()
+            return _parse_rss_items(r.text, count)
+        except Exception:
+            return []
+
+    def fetch_country_headlines(count=40):
+        url = f"https://news.google.com/rss?hl={GOOGLE_NEWS_HL}&gl={NEWS_COUNTRY}&ceid={GOOGLE_NEWS_CEID}"
+        try:
+            r = httpx.get(url, timeout=8, follow_redirects=True)
+            r.raise_for_status()
+            return _parse_rss_items(r.text, count)
+        except Exception:
+            return []
+
+    def fetch_interest_articles(topic, count=2):
+        res = search_news(topic, count)
+        if res.get("articles"):
+            return res.get("articles")
+        return []
+
+    city = (req.city or "").strip()
+    interests = list(dict.fromkeys([i.strip() for i in (req.interests or []) if i.strip()]))[:5]
+
+    # 1) local headlines
+    local = fetch_local_headlines(city, count=20)
+
+    # 2) country headlines (larger pool)
+    country = fetch_country_headlines(count=40)
+
+    # dedupe by title/url
+    seen = set()
+    top = []
+    for a in local + country:
+        key = (a.get("title"), a.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        top.append(a)
+        if len(top) >= 20:
+            break
+
+    # 3) gather interest articles (2 each)
+    interest_articles = []
+    for topic in interests:
+        arts = fetch_interest_articles(topic, count=2)
+        if arts:
+            for art in arts:
+                key = (art.get("title"), art.get("url"))
+                if key not in seen:
+                    interest_articles.append(art)
+                    seen.add(key)
+        else:
+            # if no interest articles, we'll let the top headlines absorb an extra country headline
+            continue
+
+    # 4) ensure interest articles are in the top-20: replace tail items with interest articles if needed
+    final = top[:]
+    replace_idx = len(final) - 1
+    for art in interest_articles:
+        if len(final) < 20:
+            final.append(art)
+        else:
+            if replace_idx < 0:
+                replace_idx = len(final) - 1
+            final[replace_idx] = art
+            replace_idx -= 1
+
+    # If still less than 20 items, try to fill from country pool
+    ci = 0
+    while len(final) < 20 and ci < len(country):
+        a = country[ci]
+        key = (a.get("title"), a.get("url"))
+        if key not in seen:
+            final.append(a)
+            seen.add(key)
+        ci += 1
+
+    # Greeting using any available weather from messages
     weather = None
-    topic_articles = {}
     for m in messages:
         if m.get("role") == "tool":
             try:
                 content = json.loads(m.get("content") or "{}")
             except Exception:
                 continue
-            # Heuristic: weather result contains 'temp_c' or 'condition'
             if isinstance(content, dict) and ("temp_c" in content or "condition" in content):
                 weather = content
-            # news articles stored as {'topic':..., 'articles':[...]} from search_news
-            if isinstance(content, dict) and content.get("topic") and content.get("articles"):
-                topic_articles[content["topic"]] = content.get("articles", [])
+                break
 
-    # Greeting
-    city = req.city or "your city"
     if weather and weather.get("temp_c") is not None:
-        greeting = f"Good morning — {city} is {weather['temp_c']}°C and {weather.get('condition','clear')}."
+        greeting = f"Good morning — {city or weather.get('city','your city')} is {weather['temp_c']}°C and {weather.get('condition','clear')}.\n"
     else:
-        greeting = f"Good morning — here's your quick brief for {city}."
+        greeting = f"Good morning — here's your quick brief for {city or 'your city'}.\n"
 
-    # Build up to 3 bullets: one per interest if possible
-    bullets = []
-    for topic in req.interests[:3]:
-        arts = topic_articles.get(topic) or []
-        if arts:
-            a = arts[0]
-            title = a.get("title", "(no headline)")
-            src = a.get("source", "source")
-            date = a.get("published", "")
-            bullets.append(f"- {topic.title()}: {title} — {src} {date}".strip())
-        else:
-            bullets.append(f"- {topic.title()}: no major updates found this morning.")
+    # Build numbered headlines
+    lines = [greeting, ""]
+    for i, a in enumerate(final[:20], start=1):
+        title = a.get("title")
+        src = a.get("source", "")
+        date = a.get("published", "")
+        lines.append(f"{i}. {title} — {src} {date}".strip())
 
-    # pad to 3 bullets
-    while len(bullets) < 3:
-        bullets.append("- No further updates.")
+    # If any interests had no updates, we leave the top list as-is (country headlines fill the gaps)
 
-    if not any(line.startswith("-") and "no major updates" not in line.lower() for line in bullets):
-        return ""
+    lines.append("")
+    lines.append(f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship.")
 
-    thought = f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship."
+    return "\n".join(lines), final
 
-    assembled = "\n".join([greeting, "", *bullets, "", thought])
-    return assembled
+
+def _assemble_brief_from_tools(req, messages) -> str:
+    """Compatibility wrapper used by tests and older callers: returns only text."""
+    text, _items = _assemble_brief_structured(req, messages)
+    return text
 
 
 def _rewrite_brief(req, user_message: str, draft: str, messages) -> str:
@@ -425,9 +521,9 @@ async def generate_brief(req: BriefRequest):
             # Final text response
             if finish_reason == "stop" and msg.content:
                 final_text = _clean_brief_text(msg.content)
-                assembled = _assemble_brief_from_tools(req, messages)
-                if assembled:
-                    final_text = assembled
+                assembled_text, assembled_items = _assemble_brief_structured(req, messages)
+                if assembled_text:
+                    final_text = assembled_text
                 elif _needs_rewrite(final_text):
                     final_text = _rewrite_brief(req, user_message, final_text, messages)
 
@@ -436,6 +532,13 @@ async def generate_brief(req: BriefRequest):
 
                 final = json.dumps({"type": "brief", "content": final_text})
                 yield f"data: {final}\n\n"
+
+                # Emit structured brief (items with title/url/source) if available
+                try:
+                    struct = json.dumps({"type": "brief_structured", "items": assembled_items})
+                    yield f"data: {struct}\n\n"
+                except Exception:
+                    pass
                 yield "data: {\"type\": \"done\"}\n\n"
                 return
 
