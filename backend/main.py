@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import httpx
 from datetime import datetime
 from pathlib import Path
@@ -136,6 +137,156 @@ TOOL_MAP = {
 }
 
 
+BAD_BRIEF_PHRASES = [
+    "briefly summarize the three articles",
+    "leo tolstoy",
+    "wordpress",
+    "swappable batteries",
+    "digitalx agencies",
+    "today's news in a nutshell",
+    "game-changer",
+    "must-have",
+    "in a nutshell",
+    "productized",
+]
+
+
+def _clean_brief_text(text: str) -> str:
+    cleaned_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip().strip('"')
+        lower = line.lower()
+
+        if not line:
+            cleaned_lines.append("")
+            continue
+
+        if any(phrase in lower for phrase in BAD_BRIEF_PHRASES):
+            continue
+
+        if line.startswith("[") and line.endswith("]"):
+            continue
+
+        cleaned_lines.append(line)
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()
+    return cleaned
+
+
+def _needs_rewrite(text: str) -> bool:
+    lower = text.lower()
+    if any(phrase in lower for phrase in BAD_BRIEF_PHRASES):
+        return True
+
+    bullet_lines = [line for line in text.splitlines() if line.lstrip().startswith(("-", "*"))]
+    if len(bullet_lines) < 3:
+        return True
+
+    if "thought for the day" not in lower:
+        return True
+
+    if "[" in text or "]" in text:
+        return True
+
+    return False
+
+
+def _fallback_brief(req) -> str:
+    focus = req.focus_today.strip() or "your top priority"
+    city = req.city.strip() or "your city"
+    return (
+        f"Good morning from {city}.\n\n"
+        f"- Start with {focus} before the day gets noisy.\n"
+        f"- Skim the headlines, then keep only the items that actually change your next move.\n"
+        f"- Leave the rest; momentum beats information overload.\n\n"
+        f"Thought for the day: Keep it simple, keep it moving."
+    )
+
+
+def _assemble_brief_from_tools(req, messages) -> str:
+    # Extract latest tool results for weather and each interest
+    weather = None
+    topic_articles = {}
+    for m in messages:
+        if m.get("role") == "tool":
+            try:
+                content = json.loads(m.get("content") or "{}")
+            except Exception:
+                continue
+            # Heuristic: weather result contains 'temp_c' or 'condition'
+            if isinstance(content, dict) and ("temp_c" in content or "condition" in content):
+                weather = content
+            # news articles stored as {'topic':..., 'articles':[...]} from search_news
+            if isinstance(content, dict) and content.get("topic") and content.get("articles"):
+                topic_articles[content["topic"]] = content.get("articles", [])
+
+    # Greeting
+    city = req.city or "your city"
+    if weather and weather.get("temp_c") is not None:
+        greeting = f"Good morning — {city} is {weather['temp_c']}°C and {weather.get('condition','clear')}."
+    else:
+        greeting = f"Good morning — here's your quick brief for {city}."
+
+    # Build up to 3 bullets: one per interest if possible
+    bullets = []
+    for topic in req.interests[:3]:
+        arts = topic_articles.get(topic) or []
+        if arts:
+            a = arts[0]
+            title = a.get("title", "(no headline)")
+            src = a.get("source", "source")
+            date = a.get("published", "")
+            bullets.append(f"- {topic.title()}: {title} — {src} {date}".strip())
+        else:
+            bullets.append(f"- {topic.title()}: no major updates found this morning.")
+
+    # pad to 3 bullets
+    while len(bullets) < 3:
+        bullets.append("- No further updates.")
+
+    thought = f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship." 
+
+    assembled = "\n".join([greeting, "", *bullets, "", thought])
+    return assembled
+
+
+def _rewrite_brief(req, user_message: str, draft: str, messages) -> str:
+    tool_notes = []
+    for message in messages:
+        if message.get("role") == "tool":
+            tool_notes.append(message.get("content", ""))
+
+    rewrite_prompt = (
+        "Rewrite the draft into a clean, useful morning brief. "
+        "Use the user's city, interests, focus, and the tool results only. "
+        "Remove anything unrelated, dramatic, or invented. "
+        "Never include literary quotes, placeholders, product pitches, generic investment advice, or article-summary stubs. "
+        "Output only the final brief in plain text.\n\n"
+        "Required format:\n"
+        "- One short greeting line tied to the day or weather.\n"
+        "- 3 concise bullet points grouped by the user's interests.\n"
+        "- One short thought for the day that is practical and original.\n"
+        "- Keep it under 220 words.\n\n"
+        f"User message: {user_message}\n\n"
+        f"Tool results: {json.dumps(tool_notes, ensure_ascii=False)}\n\n"
+        f"Draft to rewrite: {draft}"
+    )
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system", "content": "You rewrite brief copy with strict constraints and no fluff."},
+            {"role": "user", "content": rewrite_prompt},
+        ],
+        max_tokens=450,
+        temperature=0.2,
+    )
+
+    rewritten = response.choices[0].message.content or draft
+    rewritten = _clean_brief_text(rewritten)
+    return rewritten if rewritten else _fallback_brief(req)
+
+
 # ── Request model ─────────────────────────────────────────────────────────────
 
 class BriefRequest(BaseModel):
@@ -151,18 +302,24 @@ async def generate_brief(req: BriefRequest):
     interests_str = ", ".join(req.interests)
     system_prompt = (
         "You are a sharp, warm morning briefing agent. "
-        "Your job: use the available tools to gather context, then write a personalized morning brief. "
-        "Steps you MUST follow:\n"
-        "1. Call get_day_context to know what day it is.\n"
+        "Use the available tools to gather context, then write a personalized morning brief. "
+        "You MUST do this exactly:\n"
+        "1. Call get_day_context first.\n"
         "2. Call get_weather with the user's city.\n"
-        "3. Call search_news for EACH of the user's interests (one call per topic, max 3 topics).\n"
-        "4. After all tool calls are done, write the final brief.\n\n"
-        "Final brief format:\n"
-        "- Start with a one-line greeting referencing the day and weather mood.\n"
-        "- 3-5 news bullets, grouped by topic, written like a smart friend summarizing — not a headline bot.\n"
-        "- End with one short 'thought for the day' relevant to what they're focused on.\n"
-        "- Tone: warm, direct, a little witty. Never robotic. Never use the word 'delve'.\n"
-        "- Keep the whole brief under 300 words."
+        "3. Call search_news once for each interest, up to 3 total.\n"
+        "4. After tool calls finish, write the final brief.\n\n"
+        "Hard rules:\n"
+        "- Use only facts from the tools and user input. Do not invent products, quotes, or side topics.\n"
+        "- Never output placeholders like '[briefly summarize the three articles]'.\n"
+        "- Never include literary quotes, generic investment tips, or random startup ads.\n"
+        "- Keep it practical, specific, and friendly.\n"
+        "- Keep the final answer under 220 words.\n\n"
+        "Required format:\n"
+        "- One short greeting line tied to the day or weather.\n"
+        "- Exactly 3 concise bullets, one per interest, using the news results.\n"
+        "- One short thought for the day that is original and relevant.\n"
+        "- Tone: warm, direct, lightly witty, never robotic.\n"
+        "- Never use the word 'delve'."
     )
 
     user_message = (
@@ -183,7 +340,7 @@ async def generate_brief(req: BriefRequest):
                 tools=TOOLS,
                 tool_choice="auto",
                 max_tokens=800,
-                temperature=0.7,
+                temperature=0.3,
             )
 
             msg = response.choices[0].message
@@ -230,7 +387,14 @@ async def generate_brief(req: BriefRequest):
 
             # Final text response
             if finish_reason == "stop" and msg.content:
-                final = json.dumps({"type": "brief", "content": msg.content})
+                final_text = _clean_brief_text(msg.content)
+                if _needs_rewrite(final_text):
+                    final_text = _rewrite_brief(req, user_message, final_text, messages)
+
+                if _needs_rewrite(final_text):
+                    final_text = _fallback_brief(req)
+
+                final = json.dumps({"type": "brief", "content": final_text})
                 yield f"data: {final}\n\n"
                 yield "data: {\"type\": \"done\"}\n\n"
                 return
