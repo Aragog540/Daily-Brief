@@ -38,7 +38,7 @@ The **agent trace panel** in the UI makes this visible — users watch the agent
 | Frontend | React + Vite |
 | Weather | OpenWeatherMap API (free tier) |
 | News | NewsAPI (free tier) |
-| Deploy | Render (free tier) |
+| Deploy | Render Web Service (free tier) |
 
 **Why Groq?** Speed. `llama-3.1-8b-instant` runs 5–10× faster than comparable models on other providers. For a morning brief with multiple tool calls, this means a ~5 second total experience vs 30+ seconds elsewhere — critical for UX.
 
@@ -65,7 +65,7 @@ dailybrief/
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
-├── render.yaml              # One-file Render deployment config
+├── render.yaml              # Optional Render service config
 ├── .gitignore
 └── README.md
 ```
@@ -112,7 +112,7 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173)
 
-> The Vite dev server proxies `/brief` and `/health` to localhost:8000 automatically — no CORS issues locally.
+> The frontend uses relative API paths by default, so local Vite proxying and same-origin production both work.
 
 ---
 
@@ -139,36 +139,28 @@ Open [http://localhost:5173](http://localhost:5173)
 
 ## Deploy to Render
 
-### Option A: Automatic (recommended)
+### Manual Web Service setup
 
-1. Push your code to GitHub
-2. Go to [render.com](https://render.com) → New → Blueprint
-3. Connect your GitHub repo — Render reads `render.yaml` automatically
-4. It creates both services (API + static site) for you
-5. Go to the `dailybrief-api` service → Environment → add your 3 secret keys:
-   - `GROQ_API_KEY`
-   - `OPENWEATHER_API_KEY`
-   - `NEWS_API_KEY`
-6. Trigger a manual deploy on the API service
-7. Done — both URLs are live
+1. Push your code to GitHub.
+2. Go to [render.com](https://render.com) → New → Web Service.
+3. Connect this repository.
+4. Set the root directory to the repository root, not `backend` or `frontend`.
+5. Use these commands:
+    - Build: `pip install --upgrade pip setuptools wheel && pip install -r backend/requirements.txt && cd frontend && npm ci && npm run build`
+    - Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+6. Add these environment variables in Render:
+    - `GROQ_API_KEY`
+    - `OPENWEATHER_API_KEY`
+    - `NEWS_API_KEY`
+7. Deploy.
+8. Open the service URL when the deploy finishes. The FastAPI app serves both the API and the built React frontend.
 
-### Option B: Manual
+### Render notes
 
-**Backend:**
-1. Render → New Web Service → connect repo → set root dir to `backend`
-2. Build command: `pip install -r requirements.txt`
-3. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. Add your 3 env vars
-5. Deploy
-
-**Frontend:**
-1. Render → New Static Site → connect repo → set root dir to `frontend`
-2. Build command: `npm install && npm run build`
-3. Publish directory: `dist`
-4. Add env var: `VITE_API_URL` = your backend URL (e.g. `https://dailybrief-api.onrender.com`)
-5. Deploy
-
-> **Render free tier note:** Free web services spin down after 15 minutes of inactivity. First request after sleep takes ~30 seconds to cold-start. This is fine for a portfolio — just mention it.
+- You do not need a separate static site.
+- You do not need `VITE_API_URL` for this deployment, because the frontend calls the API on the same origin.
+- If you later split the frontend into a separate deployment, set `VITE_API_URL` to the backend URL.
+- Free web services spin down after 15 minutes of inactivity. The first request after sleep may take around 30 seconds.
 
 ---
 

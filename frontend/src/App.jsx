@@ -10,7 +10,7 @@ export default function App() {
   const [brief, setBrief] = useState("");
   const [error, setError] = useState("");
 
-  const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
 
   const runBrief = async ({ city, interests, focusToday }) => {
     setPhase("running");
@@ -79,6 +79,10 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="bg-visuals" aria-hidden="true">
+        <div className="bg-glow" />
+        <div className="bg-grid" />
+      </div>
       <header className="header">
         <div className="header-inner">
           <div className="logo">
