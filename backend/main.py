@@ -471,10 +471,8 @@ def _fallback_brief(req) -> str:
         greeting = "Good morning"
     elif 12 <= hour < 17:
         greeting = "Good afternoon"
-    elif 17 <= hour < 20:
-        greeting = "Good evening"
     else:
-        greeting = "Good night"
+        greeting = "Good evening"
     return (
         f"{greeting} from {city}.\n\n"
         f"- Start with {focus} before the day gets noisy.\n"
@@ -648,8 +646,6 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
         greeting_word = "Good morning"
     elif 12 <= hour < 17:
         greeting_word = "Good afternoon"
-    elif 17 <= hour < 20:
-        greeting_word = "Good evening"
     else:
         # Late night / early morning
         greeting_word = "Good evening"
