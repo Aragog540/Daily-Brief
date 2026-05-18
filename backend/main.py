@@ -495,6 +495,9 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
             pub_date = (item.findtext("pubDate") or "").strip()
             if not title:
                 continue
+            suffix = f" - {source}"
+            if title.endswith(suffix):
+                title = title[: -len(suffix)].strip()
             out.append({"title": title, "url": link, "source": source, "published": pub_date[:16] if pub_date else ""})
         return out
 
