@@ -6,11 +6,19 @@ const INTEREST_OPTIONS = [
   "Cricket", "Entertainment", "Health", "Space",
 ];
 
+function getGreetingByHour(hour) {
+  if (hour >= 5 && hour < 12) return "Good morning.";
+  if (hour >= 12 && hour < 17) return "Good afternoon.";
+  if (hour >= 17 && hour < 20) return "Good evening.";
+  return "Good night.";
+}
+
 export default function BriefForm({ onSubmit }) {
   const [city, setCity] = useState("");
   const [interests, setInterests] = useState([]);
   const [focusToday, setFocusToday] = useState("");
   const [err, setErr] = useState("");
+  const greeting = getGreetingByHour(new Date().getHours());
 
   const toggleInterest = (i) => {
     setInterests((prev) =>
@@ -28,7 +36,7 @@ export default function BriefForm({ onSubmit }) {
   return (
     <div className="form-card">
       <div className="form-header">
-        <h1 className="form-title">Good morning.</h1>
+        <h1 className="form-title">{greeting}</h1>
         <p className="form-sub">Tell me about your day. I'll handle the rest.</p>
       </div>
 

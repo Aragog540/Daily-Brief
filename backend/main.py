@@ -466,8 +466,17 @@ def _needs_rewrite(text: str) -> bool:
 def _fallback_brief(req) -> str:
     focus = req.focus_today.strip() or "your top priority"
     city = req.city.strip() or "your city"
+    hour = datetime.now().hour
+    if 5 <= hour < 12:
+        greeting = "Good morning"
+    elif 12 <= hour < 17:
+        greeting = "Good afternoon"
+    elif 17 <= hour < 20:
+        greeting = "Good evening"
+    else:
+        greeting = "Good night"
     return (
-        f"Good morning from {city}.\n\n"
+        f"{greeting} from {city}.\n\n"
         f"- Start with {focus} before the day gets noisy.\n"
         f"- Skim the headlines, then keep only the items that actually change your next move.\n"
         f"- Leave the rest; momentum beats information overload.\n\n"
