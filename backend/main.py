@@ -5,6 +5,10 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import httpx
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,7 +55,7 @@ def get_weather(city: str) -> dict:
             # Call Open-Meteo forecast
             om_url = (
                 f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto"
+                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&current_weather=true"
             )
             om = httpx.get(om_url, timeout=8)
             om.raise_for_status()
@@ -100,6 +104,7 @@ def get_weather(city: str) -> dict:
                 "summary": summary,
                 "advice": advice,
                 "current_time": curr_time,
+                "timezone": omd.get("timezone"),
             }
 
         # Otherwise use OpenWeather (requires API key)
@@ -209,6 +214,7 @@ def get_weather(city: str) -> dict:
             "summary": summary,
             "advice": advice,
             "current_time": current_time,
+            "timezone": od.get("timezone"),
         }
     except httpx.HTTPStatusError as e:
         # If API key is invalid (401), fall back to the simpler current weather endpoint.
@@ -238,7 +244,7 @@ def get_weather(city: str) -> dict:
             try:
                 om_url = (
                     f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto"
+                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&current_weather=true"
                 )
                 om = httpx.get(om_url, timeout=8)
                 om.raise_for_status()
@@ -287,6 +293,7 @@ def get_weather(city: str) -> dict:
                     "summary": summary,
                     "advice": advice,
                     "current_time": curr_time,
+                    "timezone": omd.get("timezone"),
                 }
             except Exception:
                 return {"error": "weather_unavailable"}
@@ -587,11 +594,38 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
                 weather = content
                 break
 
-    # Determine local time (prefer weather current_time if available)
+    # Determine local time (prefer weather current_time or timezone if available)
     local_dt = None
+    # If weather doesn't provide timezone, try geocoding city to find timezone
+    if (not weather or not weather.get("timezone")) and city:
+        try:
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(city)}&count=1&language=en"
+            gg = httpx.get(geo_url, timeout=6)
+            gg.raise_for_status()
+            gj = gg.json() or {}
+            res = gj.get("results") or []
+            if res and not weather:
+                # if we have no weather object yet, populate minimal timezone
+                weather = {"timezone": res[0].get("timezone")}
+            elif res and weather and not weather.get("timezone"):
+                weather["timezone"] = res[0].get("timezone")
+        except Exception:
+            pass
     if weather and weather.get("current_time"):
         try:
+            # parse ISO time from weather; may be naive (local) or include offset
             local_dt = datetime.fromisoformat(weather.get("current_time"))
+            # attach timezone info if provided
+            if weather.get("timezone") and ZoneInfo is not None:
+                try:
+                    local_dt = local_dt.replace(tzinfo=ZoneInfo(weather.get("timezone")))
+                except Exception:
+                    pass
+        except Exception:
+            local_dt = None
+    if local_dt is None and weather and weather.get("timezone") and ZoneInfo is not None:
+        try:
+            local_dt = datetime.now(ZoneInfo(weather.get("timezone")))
         except Exception:
             local_dt = None
     if local_dt is None:

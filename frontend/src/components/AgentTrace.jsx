@@ -29,8 +29,19 @@ function TraceEvent({ event }) {
     const r = event.result;
     let summary = "Done";
 
-    if (event.tool === "get_weather" && r.temp_c !== undefined) {
-      summary = `${r.temp_c}°C, ${r.condition} in ${r.city}`;
+    if (event.tool === "get_weather") {
+      const temp = r.temp_c;
+      const city = r.city || "your city";
+      const condition = r.condition ? `${r.condition} ` : "";
+      if (temp != null) {
+        summary = `${temp}°C, ${condition}in ${city}`.replace(/\s+/g, " ").trim();
+      } else if (r.summary) {
+        summary = `${city}: ${r.summary}`;
+      } else if (r.error) {
+        summary = `Error: ${r.error}`;
+      } else {
+        summary = `Weather checked for ${city}`;
+      }
     } else if (event.tool === "search_news" && r.articles) {
       summary = `${r.articles.length} articles on "${r.topic}"`;
     } else if (event.tool === "get_day_context" && r.weekday) {

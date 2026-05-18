@@ -86,7 +86,11 @@ export default function BriefOutput({ content, structured, weather, onReset }) {
                 );
               }
               // default: show current temp + short condition, or summary
-              const simple = weather.summary || `${weather.city || ''} ${weather.temp_c ? weather.temp_c + '°C' : ''} ${weather.condition || ''}`;
+              const parts = [];
+              if (weather.city) parts.push(weather.city);
+              if (weather.temp_c != null) parts.push(`${weather.temp_c}°C`);
+              if (weather.condition) parts.push(weather.condition);
+              const simple = weather.summary || parts.join(" ");
               return <div className="brief-weather-summary">{simple}</div>;
             })()}
             {weather.advice && weather.advice.length > 0 && (
