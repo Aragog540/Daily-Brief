@@ -4,6 +4,7 @@ import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 import httpx
+import random
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -32,6 +33,46 @@ USE_OPEN_METEO = os.environ.get("USE_OPEN_METEO", "false").lower() in ("1", "tru
 NEWS_COUNTRY = "IN"
 GOOGLE_NEWS_HL = "en-IN"
 GOOGLE_NEWS_CEID = "IN:en"
+
+
+def build_weather_advice(max_temp=None, pop=None, condition=None):
+    """Return a short list of practical, varied weather advice lines."""
+    templates = []
+    if max_temp is not None and max_temp >= 40:
+        templates = [
+            "Avoid the midday sun (12–4 PM) when possible.",
+            "Sip water regularly — small, frequent amounts keep you hydrated.",
+            "Choose lightweight, breathable cotton or linen and apply sunscreen.",
+            "Shift strenuous tasks to cooler hours; rest often in the shade.",
+        ]
+    elif max_temp is not None and max_temp >= 30:
+        templates = [
+            "Keep water nearby and take regular breaks if you're outside.",
+            "Wear light, breathable clothing and use sunscreen when needed.",
+            "Try to schedule heavy activity for morning or evening.",
+        ]
+    else:
+        templates = [
+            "Dress for the expected temperature.",
+            "Carry an umbrella if showers are likely.",
+        ]
+
+    if pop is not None and pop >= 0.5:
+        templates.append("Carry an umbrella or rain jacket — heavy showers possible.")
+    elif pop is not None and pop >= 0.2:
+        templates.append("A light rain shower is possible; consider a compact umbrella.")
+
+    if condition:
+        c = condition.lower()
+        if "haze" in c or "smog" in c or "air quality" in c:
+            templates.append("If air quality is poor, limit outdoor exertion and consider a mask.")
+
+    # Choose up to 4 varied items
+    count = min(4, len(templates))
+    try:
+        return random.sample(templates, count)
+    except Exception:
+        return templates[:count]
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
@@ -87,9 +128,7 @@ def get_weather(city: str) -> dict:
                     summary_parts.append("with very little chance of rain")
 
             summary = ", ".join(summary_parts).strip().capitalize() + "."
-            advice = ["Stay hydrated", "Use light clothing and sunscreen"]
-            if max_temp and max_temp >= 40:
-                advice = ["Avoid direct sun between 12 PM – 4 PM", "Stay hydrated", "Use light cotton clothes and sunscreen", "Limit strenuous outdoor activity"]
+            advice = build_weather_advice(max_temp=max_temp, pop=pop)
 
             return {
                 "city": name,
@@ -276,9 +315,7 @@ def get_weather(city: str) -> dict:
                         summary_parts.append("with very little chance of rain")
 
                 summary = ", ".join(summary_parts).strip().capitalize() + "."
-                advice = ["Stay hydrated", "Use light clothing and sunscreen"]
-                if max_temp and max_temp >= 40:
-                    advice = ["Avoid direct sun between 12 PM – 4 PM", "Stay hydrated", "Use light cotton clothes and sunscreen", "Limit strenuous outdoor activity"]
+                advice = build_weather_advice(max_temp=max_temp, pop=pop)
 
                 return {
                     "city": city,
