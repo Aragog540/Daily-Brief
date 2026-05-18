@@ -538,59 +538,63 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
     city = (req.city or "").strip()
     interests = list(dict.fromkeys([i.strip() for i in (req.interests or []) if i.strip()]))[:5]
 
-    # 1) local headlines
+    # 1) local headlines (prefer a small local slice, but never exceed 10)
     local = fetch_local_headlines(city, count=20)
 
-    # 2) country headlines (larger pool)
-    country = fetch_country_headlines(count=40)
+    # 2) country headlines (India-level pool)
+    country = fetch_country_headlines(count=60)
 
-    # dedupe by title/url
+    # 3) interest articles: fetch globally (not constrained to local) up to 3 each
+    def fetch_interest_articles_global(topic, count=3):
+        try:
+            q = urllib.parse.quote(topic)
+            url = f"https://news.google.com/rss/search?q={q}%20when%3A1d&hl=en&ceid=US:en"
+            r = httpx.get(url, timeout=8, follow_redirects=True)
+            r.raise_for_status()
+            return _parse_rss_items(r.text, count)
+        except Exception:
+            return []
+
+    # target distribution: prefer 6 local, then interest articles (3 per interest), fill remaining with India headlines
+    preferred_local = 6
+    local_limit = min(10, 20)
+    local_selected = []
     seen = set()
-    top = []
-    for a in local + country:
+
+    # pick up to preferred_local (but not exceeding local_limit)
+    for a in local[:min(preferred_local, local_limit)]:
         key = (a.get("title"), a.get("url"))
         if key in seen:
             continue
         seen.add(key)
-        top.append(a)
-        if len(top) >= 20:
-            break
+        local_selected.append(a)
 
-    # 3) gather interest articles (2 each)
+    # gather interest articles (3 each) globally
     interest_articles = []
     for topic in interests:
-        arts = fetch_interest_articles(topic, count=2)
-        if arts:
-            for art in arts:
-                key = (art.get("title"), art.get("url"))
-                if key not in seen:
-                    interest_articles.append(art)
-                    seen.add(key)
-        else:
-            # if no interest articles, we'll let the top headlines absorb an extra country headline
-            continue
+        arts = fetch_interest_articles_global(topic, count=3)
+        for art in arts:
+            key = (art.get("title"), art.get("url"))
+            if key not in seen:
+                interest_articles.append(art)
+                seen.add(key)
 
-    # 4) ensure interest articles are in the top-20: replace tail items with interest articles if needed
-    final = top[:]
-    replace_idx = len(final) - 1
-    for art in interest_articles:
-        if len(final) < 20:
-            final.append(art)
-        else:
-            if replace_idx < 0:
-                replace_idx = len(final) - 1
-            final[replace_idx] = art
-            replace_idx -= 1
+    # build final list: start with local_selected, then interest_articles, then fill with country headlines
+    final = []
+    final.extend(local_selected)
+    final.extend(interest_articles)
 
-    # If still less than 20 items, try to fill from country pool
-    ci = 0
-    while len(final) < 20 and ci < len(country):
-        a = country[ci]
+    for a in country:
+        if len(final) >= 20:
+            break
         key = (a.get("title"), a.get("url"))
-        if key not in seen:
-            final.append(a)
-            seen.add(key)
-        ci += 1
+        if key in seen:
+            continue
+        seen.add(key)
+        final.append(a)
+
+    # ensure exactly 20 items max
+    final = final[:20]
 
     # Greeting using any available weather from messages (time-aware)
     weather = None
