@@ -35,33 +35,78 @@ GOOGLE_NEWS_HL = "en-IN"
 GOOGLE_NEWS_CEID = "IN:en"
 
 
-def build_weather_advice(max_temp=None, pop=None, condition=None):
-    """Return a short list of practical, varied weather advice lines."""
-    templates = []
-    if max_temp is not None and max_temp >= 40:
-        templates = [
-            "Avoid the midday sun (12–4 PM) when possible.",
-            "Sip water regularly — small, frequent amounts keep you hydrated.",
-            "Choose lightweight, breathable cotton or linen and apply sunscreen.",
-            "Shift strenuous tasks to cooler hours; rest often in the shade.",
-        ]
-    elif max_temp is not None and max_temp >= 30:
-        templates = [
-            "Keep water nearby and take regular breaks if you're outside.",
-            "Wear light, breathable clothing and use sunscreen when needed.",
-            "Try to schedule heavy activity for morning or evening.",
-        ]
-    else:
-        templates = [
-            "Dress for the expected temperature.",
-            "Carry an umbrella if showers are likely.",
-        ]
+def build_weather_advice(max_temp=None, pop=None, condition=None, midday_hot=None, hot_hours=None):
+    """Return a short list of practical, varied weather advice lines.
 
+    Accepts optional `midday_hot` (bool) and `hot_hours` (list of ints)
+    so advice can be time-aware and more specific about when it's hottest.
+    """
+    templates = []
+    # Base heuristics by max temperature
+    if max_temp is not None:
+        if max_temp >= 45:
+            templates = [
+                "It's dangerously hot — avoid unnecessary outdoor time around midday.",
+                "Sip water frequently; seek air-conditioned or shaded breaks.",
+                "Light, breathable cotton or linen and broad-spectrum sunscreen are essential.",
+                "Postpone strenuous outdoor tasks until evening if possible.",
+            ]
+        elif max_temp >= 42:
+            templates = [
+                "Expect an extremely hot day; avoid direct sun where you can.",
+                "Stay hydrated with small, regular sips of water.",
+                "Wear breathable cotton/linen and use sunscreen.",
+                "Move heavy chores to cooler hours and rest often.",
+            ]
+        elif max_temp >= 40:
+            templates = [
+                "Very hot today — avoid the midday sun (12–4 PM).",
+                "Keep water nearby and take regular cooling breaks.",
+                "Choose lightweight clothes and strong sun protection.",
+            ]
+        elif max_temp >= 35:
+            templates = [
+                "Warm to very warm — aim for early-morning or evening activity.",
+                "Wear light clothing and use sunscreen when outside.",
+                "Stay hydrated and rest in shade when possible.",
+            ]
+        elif max_temp >= 30:
+            templates = [
+                "Warm day — keep water handy and take breaks outdoors.",
+                "Light clothing and sun protection are a good idea.",
+                "Shift heavy work to cooler parts of the day if you can.",
+            ]
+        elif max_temp >= 25:
+            templates = [
+                "Mild weather — comfortable for most outdoor plans.",
+                "A light layer is probably sufficient; pack sunscreen if sunny.",
+            ]
+        else:
+            templates = [
+                "Dress for the expected temperature.",
+                "Carry an umbrella if showers are likely.",
+            ]
+
+    # Time-aware tweaks
+    if midday_hot is True:
+        # make sure midday advice appears
+        templates.insert(0, "Expect the hottest stretch around midday — avoid 12–4 PM if you can.")
+    elif midday_hot is False and hot_hours:
+        # If hottest hours are not midday, give a precise heads-up
+        try:
+            hrs = sorted(set(int(h) for h in hot_hours if isinstance(h, (int, float))))[:3]
+            hr_text = ", ".join(f"{h}:00" for h in hrs)
+            templates.append(f"Peak heat looks likely around {hr_text}; plan heavy work outside those hours.")
+        except Exception:
+            pass
+
+    # Rain-based additions
     if pop is not None and pop >= 0.5:
         templates.append("Carry an umbrella or rain jacket — heavy showers possible.")
     elif pop is not None and pop >= 0.2:
         templates.append("A light rain shower is possible; consider a compact umbrella.")
 
+    # Condition-based additions
     if condition:
         c = condition.lower()
         if "haze" in c or "smog" in c or "air quality" in c:
@@ -73,6 +118,25 @@ def build_weather_advice(max_temp=None, pop=None, condition=None):
         return random.sample(templates, count)
     except Exception:
         return templates[:count]
+
+
+def _temp_descriptor(max_temp: int | None) -> str:
+    """Return a short adjective describing the daytime temperature for summary phrasing."""
+    if max_temp is None:
+        return "temperatures"
+    if max_temp >= 45:
+        return "extremely scorching"
+    if max_temp >= 42:
+        return "extremely hot"
+    if max_temp >= 40:
+        return "very hot"
+    if max_temp >= 35:
+        return "very warm"
+    if max_temp >= 30:
+        return "warm"
+    if max_temp >= 25:
+        return "mild"
+    return "cool"
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
@@ -96,7 +160,7 @@ def get_weather(city: str) -> dict:
             # Call Open-Meteo forecast
             om_url = (
                 f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&current_weather=true"
+                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&hourly=temperature_2m&timezone=auto&current_weather=true"
             )
             om = httpx.get(om_url, timeout=8)
             om.raise_for_status()
@@ -112,12 +176,34 @@ def get_weather(city: str) -> dict:
             min_temp = round(mins[0]) if mins else None
             pop = pops[0] / 100.0 if pops else None
 
+            # Parse hourly temps to detect midday heat and hottest hours
+            midday_hot = None
+            hot_hours = []
+            try:
+                hourly = omd.get("hourly", {})
+                times = hourly.get("time", [])
+                temps = hourly.get("temperature_2m", [])
+                hourly_pairs = list(zip(times, temps))
+                midday_temps = []
+                for tstr, temp in hourly_pairs:
+                    try:
+                        h = datetime.fromisoformat(tstr).hour
+                    except Exception:
+                        continue
+                    if 12 <= h < 16:
+                        midday_temps.append(temp)
+                    if temp is not None and temp >= 35:
+                        hot_hours.append(h)
+                if midday_temps:
+                    midday_hot = max(midday_temps) >= 35
+            except Exception:
+                midday_hot = None
+                hot_hours = []
+
             summary_parts = []
             if max_temp is not None and min_temp is not None:
-                if max_temp >= 42:
-                    summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
-                else:
-                    summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
+                desc = _temp_descriptor(max_temp)
+                summary_parts.append(f"expected to be {desc} today, with highs around {max_temp}°C and lows near {min_temp}°C")
 
             if pop is not None:
                 if pop >= 0.5:
@@ -128,7 +214,7 @@ def get_weather(city: str) -> dict:
                     summary_parts.append("with very little chance of rain")
 
             summary = ", ".join(summary_parts).strip().capitalize() + "."
-            advice = build_weather_advice(max_temp=max_temp, pop=pop)
+            advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=None, midday_hot=midday_hot, hot_hours=hot_hours)
 
             return {
                 "city": name,
@@ -144,6 +230,8 @@ def get_weather(city: str) -> dict:
                 "advice": advice,
                 "current_time": curr_time,
                 "timezone": omd.get("timezone"),
+                "midday_hot": midday_hot,
+                "hot_hours": hot_hours,
             }
 
         # Otherwise use OpenWeather (requires API key)
@@ -161,10 +249,10 @@ def get_weather(city: str) -> dict:
         lon = geo[0]["lon"]
         name = geo[0].get("name", city)
 
-        # 2) onecall for daily forecast
+        # 2) onecall for daily forecast (keep hourly for time-aware advice)
         one_url = (
             f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}"
-            f"&exclude=minutely,hourly,alerts&units=metric&appid={WEATHER_API_KEY}"
+            f"&exclude=minutely,alerts&units=metric&appid={WEATHER_API_KEY}"
         )
         o = httpx.get(one_url, timeout=8)
         o.raise_for_status()
@@ -190,17 +278,34 @@ def get_weather(city: str) -> dict:
 
         max_temp = round(today.get("temp", {}).get("max")) if today.get("temp") else None
         min_temp = round(today.get("temp", {}).get("min")) if today.get("temp") else None
+        # Parse hourly to detect midday heat
+        midday_hot = None
+        hot_hours = []
+        try:
+            hourly = od.get("hourly", []) or []
+            for hitem in hourly:
+                hdt = hitem.get("dt")
+                tmp = hitem.get("temp")
+                if hdt is None or tmp is None:
+                    continue
+                local_h = datetime.utcfromtimestamp(hdt + (od.get("timezone_offset", 0) or 0)).hour
+                if 12 <= local_h < 16:
+                    if midday_hot is None:
+                        midday_hot = tmp >= 35
+                    else:
+                        midday_hot = midday_hot or (tmp >= 35)
+                if tmp >= 35:
+                    hot_hours.append(local_h)
+        except Exception:
+            midday_hot = None
+            hot_hours = []
         day_weather = (today.get("weather") or [{}])[0].get("description", "")
 
         # Interpretive summary
         summary_parts = []
         if max_temp is not None and min_temp is not None:
-            if max_temp >= 42:
-                summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
-            elif max_temp >= 35:
-                summary_parts.append(f"expected to be very warm, with highs near {max_temp}°C and lows around {min_temp}°C")
-            else:
-                summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
+            desc = _temp_descriptor(max_temp)
+            summary_parts.append(f"expected to be {desc} today, with highs near {max_temp}°C and lows around {min_temp}°C")
         elif temp_now is not None:
             summary_parts.append(f"around {temp_now}°C right now")
 
@@ -219,26 +324,8 @@ def get_weather(city: str) -> dict:
 
         summary = ", ".join(summary_parts).strip().capitalize() + "."
 
-        # Advice bullets
-        advice = []
-        if max_temp is not None and max_temp >= 40:
-            advice.extend([
-                "Avoid direct sun between 12 PM – 4 PM",
-                "Stay hydrated",
-                "Use light cotton clothes and sunscreen",
-                "Limit strenuous outdoor activity",
-            ])
-        elif max_temp is not None and max_temp >= 30:
-            advice.extend([
-                "Stay hydrated",
-                "Use light clothing and sunscreen",
-                "Take breaks if working outside",
-            ])
-        else:
-            advice.extend([
-                "Dress for the expected temperature",
-                "Carry an umbrella if showers are likely",
-            ])
+        # Advice bullets (time-aware)
+        advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=day_weather, midday_hot=midday_hot, hot_hours=hot_hours)
 
         return {
             "city": name,
@@ -253,7 +340,9 @@ def get_weather(city: str) -> dict:
             "summary": summary,
             "advice": advice,
             "current_time": current_time,
-            "timezone": od.get("timezone"),
+                "timezone": od.get("timezone"),
+                "midday_hot": midday_hot,
+                "hot_hours": hot_hours,
         }
     except httpx.HTTPStatusError as e:
         # If API key is invalid (401), fall back to the simpler current weather endpoint.
@@ -283,7 +372,7 @@ def get_weather(city: str) -> dict:
             try:
                 om_url = (
                     f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&current_weather=true"
+                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&hourly=temperature_2m&timezone=auto&current_weather=true"
                 )
                 om = httpx.get(om_url, timeout=8)
                 om.raise_for_status()
@@ -298,6 +387,29 @@ def get_weather(city: str) -> dict:
                 max_temp = round(maxs[0]) if maxs else None
                 min_temp = round(mins[0]) if mins else None
                 pop = pops[0] / 100.0 if pops else None
+
+                # parse hourly for midday-hot detection
+                midday_hot = None
+                hot_hours = []
+                try:
+                    hourly = omd.get("hourly", {})
+                    times = hourly.get("time", [])
+                    temps = hourly.get("temperature_2m", [])
+                    for tstr, temp in zip(times, temps):
+                        try:
+                            h = datetime.fromisoformat(tstr).hour
+                        except Exception:
+                            continue
+                        if 12 <= h < 16 and temp is not None:
+                            if midday_hot is None:
+                                midday_hot = temp >= 35
+                            else:
+                                midday_hot = midday_hot or (temp >= 35)
+                        if temp is not None and temp >= 35:
+                            hot_hours.append(h)
+                except Exception:
+                    midday_hot = None
+                    hot_hours = []
 
                 summary_parts = []
                 if max_temp is not None and min_temp is not None:
@@ -315,7 +427,7 @@ def get_weather(city: str) -> dict:
                         summary_parts.append("with very little chance of rain")
 
                 summary = ", ".join(summary_parts).strip().capitalize() + "."
-                advice = build_weather_advice(max_temp=max_temp, pop=pop)
+                advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=None, midday_hot=midday_hot, hot_hours=hot_hours)
 
                 return {
                     "city": city,
@@ -331,6 +443,8 @@ def get_weather(city: str) -> dict:
                     "advice": advice,
                     "current_time": curr_time,
                     "timezone": omd.get("timezone"),
+                    "midday_hot": midday_hot,
+                    "hot_hours": hot_hours,
                 }
             except Exception:
                 return {"error": "weather_unavailable"}
@@ -721,6 +835,14 @@ def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
                 if not s.endswith("."):
                     s = s + "."
                 greeting = f"{greeting}\n{s}\n"
+
+        # Append a few concise weather advice lines when available
+        if weather.get("advice"):
+            # ensure a separating newline
+            if not greeting.endswith("\n"):
+                greeting += "\n"
+            for adv in weather.get("advice")[:4]:
+                greeting += f"{adv}\n"
 
     # Build numbered headlines
     lines = [greeting, ""]

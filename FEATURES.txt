@@ -1,0 +1,56 @@
+DailyBrief — Features Overview
+
+Overview:
+DailyBrief is a small agentic morning-brief web app with a streaming backend and a React frontend.
+It gathers local weather, curated news headlines by user interests, and generates concise morning briefs.
+
+Core features:
+- Agent-driven streaming brief generation (SSE): backend streams tool_call and tool_result events while composing the brief.
+- Weather integration: supports OpenWeather (API key) and Open-Meteo (no key) with current conditions, highs/lows, and advice bullets.
+- News aggregation: pulls Google News RSS for local (city) and country headlines, deduplicates, and assembles a prioritized top-20 list.
+- Interest-focused articles: fetches up to 2 articles per user interest and ensures they appear in the top headlines.
+- Structured brief output: emits both plain text brief and a structured item list (title, url, source, published) for UI rendering.
+- Agent trace UI: shows tool_call and tool_result events (get_weather, search_news, get_day_context) while the agent runs.
+- Simple markdown-ish renderer on frontend: turns bullet/paragraph lines into HTML lists and paragraphs for readable briefs.
+- Time-aware greeting: greeting adapts to local time (Good morning / Good afternoon / Good evening).
+- Copy and reset actions: copy brief to clipboard and reset the session for a new brief.
+
+Frontend components (where to look):
+- App.jsx: top-level app state, runs the /brief streaming request and routes events to AgentTrace and BriefOutput.
+- components/BriefForm.jsx: input form for city, interests, and focus; shows the time-aware greeting.
+- components/AgentTrace.jsx: renders streaming tool trace rows and result summaries.
+- components/BriefOutput.jsx: renders the generated brief or the structured headlines list; shows weather summary and advice.
+
+Backend components & behavior:
+- backend/main.py: FastAPI app exposing POST /brief SSE stream. Implements tools: get_weather, search_news, get_day_context.
+  - get_weather: prefers Open-Meteo when configured, otherwise uses OpenWeather One Call; returns temp, summary, advice, timezone, current_time.
+  - search_news: scrapes Google News RSS and returns cleaned article list (title, url, source, published).
+  - _assemble_brief_structured: builds prioritized headlines list, dedupes items, merges interest articles.
+  - Streaming protocol: emits JSON events with types: tool_call, tool_result, brief_structured, brief, error.
+
+External services & environment variables:
+- GROQ_API_KEY: required for Groq client calls used during rewrite/completions.
+- OPENWEATHER_API_KEY: optional (required if USE_OPEN_METEO is false).
+- USE_OPEN_METEO: if true (1/true/yes), use Open-Meteo instead of OpenWeather.
+- VITE_API_URL (frontend env): base URL for API requests in development.
+
+Developer notes / local run:
+- Python: backend requires FastAPI, httpx, pydantic, groq. Use the provided requirements.txt for a venv install.
+- Frontend: React + Vite. Install npm deps then run `npm run dev`.
+- To test streaming locally: POST to `/brief` with JSON {"city":"Vadodara","interests":["India"],"focus_today":"..."} and observe SSE events.
+
+Files of interest:
+- backend/main.py
+- frontend/src/App.jsx
+- frontend/src/components/BriefForm.jsx
+- frontend/src/components/BriefOutput.jsx
+- frontend/src/components/AgentTrace.jsx
+- scripts/test_brief.py (tests and small utilities)
+
+Potential improvements (future):
+- Normalize and unify source attribution to avoid duplicate publisher names across title and source.
+- Improve offline/error UX when weather/news APIs fail.
+- Add unit/integration tests for streaming SSE parsing and UI rendering.
+- Add CI workflow to run Python/JS linters and tests, and auto-deploy.
+
+Generated: May 18, 2026
