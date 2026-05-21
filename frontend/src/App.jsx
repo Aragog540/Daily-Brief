@@ -141,9 +141,6 @@ export default function App() {
           </section>
         ) : (
           <>
-            <div className="auth-toolbar">
-              <Auth onUser={(u, t) => { setUser(u); setToken(t); }} user={user} variant="toolbar" />
-            </div>
             {!defaultCity && token && (
               <ProfileCity token={token} onSaved={(c) => setDefaultCity(c)} />
             )}

@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 
 export default function Auth({ onUser, user, variant = 'landing' }) {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -30,15 +31,24 @@ export default function Auth({ onUser, user, variant = 'landing' }) {
   const signIn = async () => {
     setMsg('');
     if (!email) return setMsg('Enter your email.');
-    const redirectTo = import.meta.env.VITE_SITE_URL || window.location.origin;
-    const { error } = await supabase.auth.signInWithOtp({
+    if (!password) return setMsg('Enter your password.');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) setMsg(error.message);
+  };
+
+  const signUp = async () => {
+    setMsg('');
+    if (!email) return setMsg('Enter your email.');
+    if (!password) return setMsg('Enter your password.');
+    const { error } = await supabase.auth.signUp({
       email,
+      password,
       options: {
-        emailRedirectTo: redirectTo,
+        emailRedirectTo: import.meta.env.VITE_SITE_URL || window.location.origin,
       },
     });
     if (error) setMsg(error.message);
-    else setMsg('Magic link sent — check your email.');
+    else setMsg('Account created. You are signed in if email confirmation is disabled.');
   };
 
   const signOut = async () => {
@@ -52,8 +62,8 @@ export default function Auth({ onUser, user, variant = 'landing' }) {
         {variant === 'landing' && (
           <>
             <p className="auth-kicker">Create your personal brief</p>
-            <h2 className="auth-title">Sign up or sign in with a magic link</h2>
-            <p className="auth-copy">Use your email to create an account. The same link also signs you back in later.</p>
+            <h2 className="auth-title">Sign in once, stay signed in</h2>
+            <p className="auth-copy">Use your email and password. Supabase keeps the session in the browser until you log out.</p>
           </>
         )}
         <input
@@ -63,7 +73,17 @@ export default function Auth({ onUser, user, variant = 'landing' }) {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
-        <button className="btn" onClick={signIn}>{variant === 'landing' ? 'Send magic link' : 'Sign in'}</button>
+        <input
+          className="input"
+          type="password"
+          placeholder="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <div className="auth-actions">
+          <button className="btn" onClick={signIn}>Sign in</button>
+          <button className="btn muted" onClick={signUp}>Create account</button>
+        </div>
         {user && <button className="btn muted" onClick={signOut}>Sign out</button>}
         {msg && <p className="auth-msg">{msg}</p>}
       </div>

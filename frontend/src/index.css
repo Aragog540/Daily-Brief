@@ -237,6 +237,12 @@ body {
   display: none;
 }
 
+.auth-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 .auth-msg {
   font-size: 0.82rem;
   color: var(--ink-3);
