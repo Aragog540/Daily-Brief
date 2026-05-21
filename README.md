@@ -50,6 +50,4 @@ Open [http://localhost:5173](http://localhost:5173).
 - The repo pins Python 3.14 in `runtime.txt`.
 - You do not need `VITE_API_URL` for the single-service setup.
 
-## License
 
-MIT.
