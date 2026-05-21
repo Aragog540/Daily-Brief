@@ -138,6 +138,19 @@ body {
 /* Ensure content sits above background visuals */
 .main, .footer { position: relative; z-index: 10; }
 
+.auth-stage {
+  min-height: calc(100vh - 190px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 .main {
   flex: 1;
@@ -158,6 +171,100 @@ body {
   border: 1px solid rgba(17, 24, 39, 0.07);
   backdrop-filter: blur(14px) saturate(110%);
   box-shadow: 0 20px 48px rgba(17, 24, 39, 0.07);
+}
+
+.auth {
+  width: min(100%, 540px);
+}
+
+.auth-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 2rem;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 20px;
+  border: 1px solid rgba(17, 24, 39, 0.07);
+  backdrop-filter: blur(14px) saturate(110%);
+  box-shadow: 0 20px 48px rgba(17, 24, 39, 0.07);
+}
+
+.auth-kicker {
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--accent-1);
+}
+
+.auth-title {
+  font-family: var(--serif);
+  font-size: 2.35rem;
+  line-height: 1.04;
+  letter-spacing: -0.02em;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.auth-copy {
+  color: var(--ink-2);
+  font-size: 0.98rem;
+  font-weight: 300;
+}
+
+.auth-toolbar .auth {
+  width: auto;
+}
+
+.auth-toolbar .auth-inner {
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.auth-toolbar .input {
+  width: 220px;
+}
+
+.auth-toolbar .auth-kicker,
+.auth-toolbar .auth-title,
+.auth-toolbar .auth-copy {
+  display: none;
+}
+
+.auth-msg {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+.btn {
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.7rem 1rem;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 12px;
+  background: linear-gradient(90deg, #c2410c, #f59e0b);
+  color: #fffaf2;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
+}
+
+.btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(194, 65, 12, 0.14); }
+
+.btn.muted {
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.btn.muted:hover {
+  box-shadow: none;
+  border-color: rgba(17, 24, 39, 0.2);
 }
 
 .form-header { margin-bottom: 0.2rem; }

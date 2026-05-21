@@ -135,19 +135,27 @@ export default function App() {
       </header>
 
       <main className="main">
-        <div style={{ position: 'absolute', right: 20, top: 20 }}>
-          <Auth onUser={(u, t) => { setUser(u); setToken(t); }} />
-          {user && !defaultCity && token && (
-            <ProfileCity token={token} onSaved={(c) => setDefaultCity(c)} />
-          )}
-        </div>
-        {phase === "idle" && <BriefForm onSubmit={runBrief} defaultCity={defaultCity} />}
+        {!user ? (
+          <section className="auth-stage">
+            <Auth onUser={(u, t) => { setUser(u); setToken(t); }} variant="landing" />
+          </section>
+        ) : (
+          <>
+            <div className="auth-toolbar">
+              <Auth onUser={(u, t) => { setUser(u); setToken(t); }} user={user} variant="toolbar" />
+            </div>
+            {!defaultCity && token && (
+              <ProfileCity token={token} onSaved={(c) => setDefaultCity(c)} />
+            )}
+            {phase === "idle" && <BriefForm onSubmit={runBrief} defaultCity={defaultCity} />}
 
-        {(phase === "running" || phase === "done") && (
-          <div className="workspace">
-            <AgentTrace events={traceEvents} isRunning={phase === "running"} />
-            {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
-          </div>
+            {(phase === "running" || phase === "done") && (
+              <div className="workspace">
+                <AgentTrace events={traceEvents} isRunning={phase === "running"} />
+                {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
+              </div>
+            )}
+          </>
         )}
 
         {phase === "error" && (
