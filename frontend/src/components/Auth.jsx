@@ -30,7 +30,13 @@ export default function Auth({ onUser, user, variant = 'landing' }) {
   const signIn = async () => {
     setMsg('');
     if (!email) return setMsg('Enter your email.');
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    const redirectTo = import.meta.env.VITE_SITE_URL || window.location.origin;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: redirectTo,
+      },
+    });
     if (error) setMsg(error.message);
     else setMsg('Magic link sent — check your email.');
   };
