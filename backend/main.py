@@ -113,11 +113,29 @@ def build_weather_advice(max_temp=None, pop=None, condition=None, midday_hot=Non
             templates.append("If air quality is poor, limit outdoor exertion and consider a mask.")
 
     # Choose up to 4 varied items
-    count = min(4, len(templates))
+    # Deduplicate exact strings while preserving order
+    seen = set()
+    unique = []
+    for t in templates:
+        if t not in seen:
+            unique.append(t)
+            seen.add(t)
+
+    # Collapse multiple 'midday/12-4' warnings into a single line
     try:
-        return random.sample(templates, count)
+        midday_indices = [i for i, t in enumerate(unique) if re.search(r"\b(12\s*[–\-–—]?\s*4|12\s*PM|midday|midday sun)\b", t, re.I)]
+        if len(midday_indices) > 1:
+            # keep the first midday-related template, remove the rest
+            for idx in sorted(midday_indices[1:], reverse=True):
+                unique.pop(idx)
     except Exception:
-        return templates[:count]
+        pass
+
+    count = min(4, len(unique))
+    try:
+        return random.sample(unique, count)
+    except Exception:
+        return unique[:count]
 
 
 def _temp_descriptor(max_temp: int | None) -> str:
