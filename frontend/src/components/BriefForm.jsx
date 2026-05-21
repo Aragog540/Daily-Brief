@@ -13,8 +13,8 @@ function getGreetingByHour(hour) {
   return "Good evening.";
 }
 
-export default function BriefForm({ onSubmit }) {
-  const [city, setCity] = useState("");
+export default function BriefForm({ onSubmit, defaultCity = "" }) {
+  const [city, setCity] = useState(defaultCity || "");
   const [interests, setInterests] = useState([]);
   const [focusToday, setFocusToday] = useState("");
   const [err, setErr] = useState("");
@@ -27,10 +27,11 @@ export default function BriefForm({ onSubmit }) {
   };
 
   const handleSubmit = () => {
-    if (!city.trim()) return setErr("Enter your city.");
+    const useCity = (defaultCity && !city) ? defaultCity : city;
+    if (!useCity || !useCity.trim()) return setErr("Enter your city.");
     if (interests.length === 0) return setErr("Pick at least one interest.");
     setErr("");
-    onSubmit({ city: city.trim(), interests, focusToday: focusToday.trim() });
+    onSubmit({ city: (useCity || "").trim(), interests, focusToday: focusToday.trim() });
   };
 
   return (
@@ -40,17 +41,19 @@ export default function BriefForm({ onSubmit }) {
         <p className="form-sub">Tell me about your day. I'll handle the rest.</p>
       </div>
 
-      <div className="field">
-        <label className="label">Your city</label>
-        <input
-          className="input"
-          type="text"
-          placeholder="e.g. Ahmedabad"
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-        />
-      </div>
+      {!defaultCity && (
+        <div className="field">
+          <label className="label">Your city</label>
+          <input
+            className="input"
+            type="text"
+            placeholder="e.g. Ahmedabad"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          />
+        </div>
+      )}
 
       <div className="field">
         <label className="label">

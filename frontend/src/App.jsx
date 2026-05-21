@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import BriefForm from "./components/BriefForm";
 import AgentTrace from "./components/AgentTrace";
 import BriefOutput from "./components/BriefOutput";
 import "./index.css";
+import Auth from "./components/Auth";
+import { supabase } from "./supabaseClient";
+import ProfileCity from "./components/ProfileCity";
 
 export default function App() {
   const [phase, setPhase] = useState("idle"); // idle | running | done | error
@@ -11,6 +14,31 @@ export default function App() {
   const [briefStructured, setBriefStructured] = useState([]);
   const [weather, setWeather] = useState(null);
   const [error, setError] = useState("");
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
+  const [defaultCity, setDefaultCity] = useState("");
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (!user) {
+        setDefaultCity("");
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('city')
+          .eq('user_id', user.id)
+          .single();
+        if (!error && data) {
+          setDefaultCity(data.city || "");
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    loadProfile();
+  }, [user]);
 
   const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
 
@@ -22,9 +50,12 @@ export default function App() {
     setError("");
 
     try {
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const res = await fetch(`${API_BASE}/brief`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           city,
           interests,
@@ -104,7 +135,13 @@ export default function App() {
       </header>
 
       <main className="main">
-        {phase === "idle" && <BriefForm onSubmit={runBrief} />}
+        <div style={{ position: 'absolute', right: 20, top: 20 }}>
+          <Auth onUser={(u, t) => { setUser(u); setToken(t); }} />
+          {user && !defaultCity && token && (
+            <ProfileCity token={token} onSaved={(c) => setDefaultCity(c)} />
+          )}
+        </div>
+        {phase === "idle" && <BriefForm onSubmit={runBrief} defaultCity={defaultCity} />}
 
         {(phase === "running" || phase === "done") && (
           <div className="workspace">

@@ -12,6 +12,7 @@ except Exception:
     ZoneInfo = None
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
@@ -33,6 +34,8 @@ USE_OPEN_METEO = os.environ.get("USE_OPEN_METEO", "false").lower() in ("1", "tru
 NEWS_COUNTRY = "IN"
 GOOGLE_NEWS_HL = "en-IN"
 GOOGLE_NEWS_CEID = "IN:en"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 
 def build_weather_advice(max_temp=None, pop=None, condition=None, midday_hot=None, hot_hours=None):
@@ -934,10 +937,63 @@ class BriefRequest(BaseModel):
     focus_today: str = ""
 
 
+async def _supabase_get_user(access_token: str) -> dict | None:
+    """Return the Supabase auth user object for a bearer token, or None."""
+    if not SUPABASE_URL or not access_token:
+        return None
+    try:
+        url = SUPABASE_URL.rstrip("/") + "/auth/v1/user"
+        r = httpx.get(url, headers={"Authorization": f"Bearer {access_token}"}, timeout=6)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def _supabase_get_profile_city(user_id: str) -> str | None:
+    """Fetch the `city` for a given user_id from the Supabase `profiles` table using service key."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return None
+    try:
+        url = SUPABASE_URL.rstrip("/") + f"/rest/v1/profiles?select=city&user_id=eq.{user_id}"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        }
+        r = httpx.get(url, headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json() or []
+            if data:
+                return data[0].get("city")
+    except Exception:
+        pass
+    return None
+
+
+def _supabase_upsert_profile(user_id: str, email: str | None, city: str) -> bool:
+    """Upsert a profile row (user_id, email, city) using the service role key."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return False
+    try:
+        url = SUPABASE_URL.rstrip("/") + "/rest/v1/profiles"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates",
+        }
+        payload = {"user_id": user_id, "email": email, "city": city}
+        r = httpx.post(url, headers=headers, json=payload, timeout=6)
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 # ── Agentic streaming endpoint ────────────────────────────────────────────────
 
 @app.post("/brief")
-async def generate_brief(req: BriefRequest):
+async def generate_brief(req: BriefRequest, request: Request):
     interests_str = ", ".join(req.interests)
     system_prompt = (
         "You are a sharp, warm morning briefing agent. "
@@ -970,6 +1026,21 @@ async def generate_brief(req: BriefRequest):
     )
 
     messages = [{"role": "user", "content": user_message}]
+
+    # If Authorization header present and city not provided, attempt to fill from Supabase profile
+    try:
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer") and (not req.city or not req.city.strip()):
+            token = auth.split(None, 1)[1].strip()
+            user = await _supabase_get_user(token)
+            if user and isinstance(user, dict):
+                uid = user.get("id") or user.get("sub")
+                if uid:
+                    city = _supabase_get_profile_city(uid)
+                    if city:
+                        req.city = city
+    except Exception:
+        pass
 
     async def stream():
         # Agent loop — max 8 iterations to stay within free tier limits
@@ -1076,6 +1147,28 @@ async def generate_brief(req: BriefRequest):
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+class ProfilePayload(BaseModel):
+    city: str
+
+
+@app.post("/profile")
+async def upsert_profile(payload: ProfilePayload, request: Request):
+    """Upsert the authenticated user's profile (city). Requires Authorization: Bearer <access_token>."""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer"):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = auth.split(None, 1)[1].strip()
+    user = await _supabase_get_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    uid = user.get("id") or user.get("sub")
+    email = user.get("email")
+    ok = _supabase_upsert_profile(uid, email, payload.city)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not upsert profile")
+    return {"status": "ok", "city": payload.city}
 
 
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
