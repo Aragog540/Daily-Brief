@@ -6,6 +6,7 @@ import "./index.css";
 import Auth from "./components/Auth";
 import { supabase } from "./supabaseClient";
 import BriefHistory from "./components/BriefHistory";
+import MadeBy from "./components/MadeBy";
 
 function parseInterests(value) {
   if (Array.isArray(value)) return value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim());
@@ -275,6 +276,7 @@ export default function App() {
       <footer className="footer">
         <p>Powered by Groq · LLaMA 3.1 8B · Built for humans</p>
       </footer>
+      <MadeBy />
     </div>
   );
 }
