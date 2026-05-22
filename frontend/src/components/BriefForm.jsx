@@ -1,11 +1,5 @@
 import { useState } from "react";
 
-const INTEREST_OPTIONS = [
-  "Technology", "Science", "Business", "Sports", "Politics",
-  "AI & ML", "Finance", "Climate", "India", "Startups",
-  "Cricket", "Entertainment", "Health", "Space",
-];
-
 function getGreetingByHour(hour) {
   if (hour >= 5 && hour < 12) return "Good morning.";
   if (hour >= 12 && hour < 17) return "Good afternoon.";
@@ -13,25 +7,14 @@ function getGreetingByHour(hour) {
   return "Good evening.";
 }
 
-export default function BriefForm({ onSubmit, defaultCity = "" }) {
-  const [city, setCity] = useState(defaultCity || "");
-  const [interests, setInterests] = useState([]);
+export default function BriefForm({ onSubmit, profile }) {
   const [focusToday, setFocusToday] = useState("");
   const [err, setErr] = useState("");
   const greeting = getGreetingByHour(new Date().getHours());
 
-  const toggleInterest = (i) => {
-    setInterests((prev) =>
-      prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i].slice(0, 3)
-    );
-  };
-
   const handleSubmit = () => {
-    const useCity = (defaultCity && !city) ? defaultCity : city;
-    if (!useCity || !useCity.trim()) return setErr("Enter your city.");
-    if (interests.length === 0) return setErr("Pick at least one interest.");
     setErr("");
-    onSubmit({ city: (useCity || "").trim(), interests, focusToday: focusToday.trim() });
+    onSubmit({ focusToday: focusToday.trim() });
   };
 
   return (
@@ -41,36 +24,23 @@ export default function BriefForm({ onSubmit, defaultCity = "" }) {
         <p className="form-sub">Tell me about your day. I'll handle the rest.</p>
       </div>
 
-      {!defaultCity && (
-        <div className="field">
-          <label className="label">Your city</label>
-          <input
-            className="input"
-            type="text"
-            placeholder="e.g. Ahmedabad"
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          />
+      {profile?.city && (
+        <div className="profile-chip">
+          <span>Saved city</span>
+          <strong>{profile.city}</strong>
         </div>
       )}
 
-      <div className="field">
-        <label className="label">
-          Interests <span className="label-hint">(pick up to 3)</span>
-        </label>
-        <div className="pill-grid">
-          {INTEREST_OPTIONS.map((i) => (
-            <button
-              key={i}
-              className={`pill ${interests.includes(i) ? "pill-active" : ""}`}
-              onClick={() => toggleInterest(i)}
-            >
-              {i}
-            </button>
-          ))}
+      {profile?.interests?.length > 0 && (
+        <div className="profile-chip-list">
+          <span>Saved interests</span>
+          <div className="profile-chip-row">
+            {profile.interests.slice(0, 5).map((item) => (
+              <span className="profile-chip-item" key={item}>{item}</span>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="field">
         <label className="label">

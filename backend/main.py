@@ -16,7 +16,7 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from groq import Groq
 
 app = FastAPI(title="DailyBrief API")
@@ -932,8 +932,8 @@ def _has_news_content(text: str, interests: list[str]) -> bool:
 # ── Request model ─────────────────────────────────────────────────────────────
 
 class BriefRequest(BaseModel):
-    city: str
-    interests: list[str]
+    city: str = ""
+    interests: list[str] = Field(default_factory=list)
     focus_today: str = ""
 
 
@@ -971,6 +971,22 @@ def _supabase_get_profile_city(user_id: str) -> str | None:
     return None
 
 
+def _extract_user_preferences(user: dict | None) -> tuple[str | None, list[str]]:
+    """Pull saved city and interests from Supabase auth metadata when available."""
+    if not user:
+        return None, []
+
+    metadata = user.get("user_metadata") or user.get("raw_user_meta_data") or {}
+    city = metadata.get("city") or metadata.get("preferred_city") or None
+
+    raw_interests = metadata.get("interests") or metadata.get("preferred_interests") or []
+    if isinstance(raw_interests, str):
+        raw_interests = [item.strip() for item in raw_interests.split(",")]
+    interests = [item.strip() for item in raw_interests if isinstance(item, str) and item.strip()]
+
+    return city, interests[:5]
+
+
 def _supabase_upsert_profile(user_id: str, email: str | None, city: str) -> bool:
     """Upsert a profile row (user_id, email, city) using the service role key."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
@@ -994,7 +1010,29 @@ def _supabase_upsert_profile(user_id: str, email: str | None, city: str) -> bool
 
 @app.post("/brief")
 async def generate_brief(req: BriefRequest, request: Request):
-    interests_str = ", ".join(req.interests)
+    interests = list(dict.fromkeys([i.strip() for i in (req.interests or []) if i.strip()]))[:5]
+    interests_str = ", ".join(interests)
+
+    # Fill gaps from the authenticated user's saved preferences if available.
+    try:
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer"):
+            token = auth.split(None, 1)[1].strip()
+            user = await _supabase_get_user(token)
+            if user and isinstance(user, dict):
+                uid = user.get("id") or user.get("sub")
+                meta_city, meta_interests = _extract_user_preferences(user)
+                if (not req.city or not req.city.strip()) and uid:
+                    city = meta_city or _supabase_get_profile_city(uid)
+                    if city:
+                        req.city = city
+                if not interests and meta_interests:
+                    interests = meta_interests
+                    interests_str = ", ".join(interests)
+    except Exception:
+        pass
+
+    req.interests = interests
     system_prompt = (
         "You are a sharp, warm morning briefing agent. "
         "Use the available tools to gather context, then write a personalized morning brief. "
@@ -1020,7 +1058,7 @@ async def generate_brief(req: BriefRequest, request: Request):
 
     user_message = (
         f"My city: {req.city}. "
-        f"My interests: {interests_str}. "
+        f"My interests: {interests_str or 'general news'}. "
         f"What I'm focused on today: {req.focus_today or 'general productivity'}. "
         "Please run your tools and give me my morning brief."
     )
@@ -1119,7 +1157,7 @@ async def generate_brief(req: BriefRequest, request: Request):
                 elif _needs_rewrite(final_text):
                     final_text = _rewrite_brief(req, user_message, final_text, messages)
 
-                if _needs_rewrite(final_text) or not _has_news_content(final_text, req.interests):
+                if _needs_rewrite(final_text) or not _has_news_content(final_text, interests):
                     final_text = _fallback_brief(req)
 
                 final = json.dumps({"type": "brief", "content": final_text})

@@ -5,7 +5,24 @@ import BriefOutput from "./components/BriefOutput";
 import "./index.css";
 import Auth from "./components/Auth";
 import { supabase } from "./supabaseClient";
-import ProfileCity from "./components/ProfileCity";
+import BriefHistory from "./components/BriefHistory";
+
+function parseInterests(value) {
+  if (Array.isArray(value)) return value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim());
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function loadHistory(key) {
+  if (!key) return [];
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function App() {
   const [phase, setPhase] = useState("idle"); // idle | running | done | error
@@ -16,38 +33,75 @@ export default function App() {
   const [error, setError] = useState("");
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [defaultCity, setDefaultCity] = useState("");
+  const [profile, setProfile] = useState({ city: "", interests: [] });
+  const [history, setHistory] = useState([]);
+  const [activeHistoryId, setActiveHistoryId] = useState(null);
+  const historyKey = user?.id ? `dailybrief-history-${user.id}` : null;
 
   useEffect(() => {
     const loadProfile = async () => {
       if (!user) {
-        setDefaultCity("");
+        setProfile({ city: "", interests: [] });
         return;
       }
       try {
+        const metadata = user.user_metadata || user.raw_user_meta_data || {};
+        const interests = parseInterests(metadata.interests || metadata.preferred_interests);
+        let city = metadata.city || metadata.preferred_city || "";
         const { data, error } = await supabase
           .from('profiles')
           .select('city')
           .eq('user_id', user.id)
           .single();
-        if (!error && data) {
-          setDefaultCity(data.city || "");
+        if (!city && !error && data) {
+          city = data.city || "";
         }
+        setProfile({ city, interests });
       } catch (e) {
-        // ignore
+        const metadata = user.user_metadata || user.raw_user_meta_data || {};
+        setProfile({
+          city: metadata.city || metadata.preferred_city || "",
+          interests: parseInterests(metadata.interests || metadata.preferred_interests),
+        });
       }
     };
     loadProfile();
   }, [user]);
 
+  useEffect(() => {
+    if (!historyKey) {
+      setHistory([]);
+      setActiveHistoryId(null);
+      return;
+    }
+    setHistory(loadHistory(historyKey));
+    setActiveHistoryId(null);
+  }, [historyKey]);
+
+  useEffect(() => {
+    if (!historyKey) return;
+    try {
+      localStorage.setItem(historyKey, JSON.stringify(history.slice(0, 12)));
+    } catch {
+      // ignore storage errors
+    }
+  }, [history, historyKey]);
+
   const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
 
-  const runBrief = async ({ city, interests, focusToday }) => {
+  const runBrief = async ({ focusToday }) => {
     setPhase("running");
     setTraceEvents([]);
     setBrief("");
     setBriefStructured([]);
     setError("");
+    setActiveHistoryId(null);
+
+    const savedCity = profile.city || "";
+    const savedInterests = profile.interests || [];
+    let latestBrief = "";
+    let latestStructured = [];
+    let latestWeather = null;
 
     try {
       const headers = { "Content-Type": "application/json" };
@@ -57,8 +111,8 @@ export default function App() {
         method: "POST",
         headers,
         body: JSON.stringify({
-          city,
-          interests,
+          city: savedCity,
+          interests: savedInterests,
           focus_today: focusToday,
         }),
       });
@@ -87,16 +141,34 @@ export default function App() {
             if (event.type === "tool_call" || event.type === "tool_result") {
               setTraceEvents((prev) => [...prev, event]);
               if (event.type === "tool_result" && event.tool === "get_weather") {
-                setWeather(event.result || null);
+                latestWeather = event.result || null;
+                setWeather(latestWeather);
               }
               } else if (event.type === "brief_structured") {
-                setBriefStructured(event.items || []);
+                latestStructured = event.items || [];
+                setBriefStructured(latestStructured);
               } else if (event.type === "brief") {
-                setBrief(event.content);
+                latestBrief = event.content || "";
+                setBrief(latestBrief);
                 setPhase("done");
             } else if (event.type === "error") {
               setError(event.message);
               setPhase("error");
+            } else if (event.type === "done") {
+              if (latestBrief) {
+                const entry = {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  city: savedCity,
+                  interests: savedInterests,
+                  focusToday: focusToday || "",
+                  content: latestBrief,
+                  structured: latestStructured,
+                  weather: latestWeather,
+                };
+                setHistory((prev) => [entry, ...prev.filter((item) => item.content !== latestBrief)].slice(0, 12));
+                setActiveHistoryId(entry.id);
+              }
             }
           } catch {
             // skip malformed events
@@ -118,6 +190,26 @@ export default function App() {
     setError("");
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setToken(null);
+    setProfile({ city: "", interests: [] });
+    setHistory([]);
+    setActiveHistoryId(null);
+    reset();
+  };
+
+  const handleSelectHistory = (entry) => {
+    setBrief(entry.content || "");
+    setBriefStructured(entry.structured || []);
+    setWeather(entry.weather || null);
+    setPhase("done");
+    setError("");
+    setTraceEvents([]);
+    setActiveHistoryId(entry.id);
+  };
+
   return (
     <div className="app">
       <div className="bg-visuals" aria-hidden="true">
@@ -131,6 +223,11 @@ export default function App() {
             <span className="logo-text">DailyBrief</span>
           </div>
           <p className="tagline">Your agentic morning intelligence</p>
+          {user && (
+            <button className="btn muted header-logout" onClick={handleLogout}>
+              Logout
+            </button>
+          )}
         </div>
       </header>
 
@@ -140,19 +237,28 @@ export default function App() {
             <Auth onUser={(u, t) => { setUser(u); setToken(t); }} variant="landing" />
           </section>
         ) : (
-          <>
-            {!defaultCity && token && (
-              <ProfileCity token={token} onSaved={(c) => setDefaultCity(c)} />
-            )}
-            {phase === "idle" && <BriefForm onSubmit={runBrief} defaultCity={defaultCity} />}
+          <div className="workspace-layout">
+            <aside className="history-shell">
+              <BriefHistory
+                entries={history}
+                activeId={activeHistoryId}
+                onSelect={handleSelectHistory}
+              />
+            </aside>
 
-            {(phase === "running" || phase === "done") && (
-              <div className="workspace">
-                <AgentTrace events={traceEvents} isRunning={phase === "running"} />
-                {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
-              </div>
-            )}
-          </>
+            <section className="workspace-main">
+              {phase === "idle" && (
+                <BriefForm onSubmit={runBrief} profile={profile} />
+              )}
+
+              {(phase === "running" || phase === "done") && (
+                <div className="workspace">
+                  <AgentTrace events={traceEvents} isRunning={phase === "running"} />
+                  {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
+                </div>
+              )}
+            </section>
+          </div>
         )}
 
         {phase === "error" && (
