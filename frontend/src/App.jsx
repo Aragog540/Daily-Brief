@@ -37,7 +37,7 @@ export default function App() {
   const [profile, setProfile] = useState({ city: "", interests: [] });
   const [history, setHistory] = useState([]);
   const [activeHistoryId, setActiveHistoryId] = useState(null);
-  const historyKey = user?.id ? `dailybrief-history-${user.id}` : null;
+  const historyKey = user?.id ? `vartaai-history-${user.id}` : null;
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -221,7 +221,7 @@ export default function App() {
         <div className="header-inner">
           <div className="logo">
             <span className="logo-mark">◈</span>
-            <span className="logo-text">DailyBrief</span>
+            <span className="logo-text">Varta AI</span>
           </div>
           <p className="tagline">Your agentic morning intelligence</p>
           {user && (
@@ -274,9 +274,10 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <p>Powered by Groq · LLaMA 3.1 8B · Built for humans</p>
+        <p>Powered by MPSB Studios</p>
       </footer>
       <MadeBy />
     </div>
   );
 }
+
