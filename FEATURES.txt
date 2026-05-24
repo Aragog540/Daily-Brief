@@ -1,7 +1,7 @@
-DailyBrief — Features Overview
+Varta AI — Features Overview
 
 Overview:
-DailyBrief is a small agentic morning-brief web app with a streaming backend and a React frontend.
+Varta AI is a small agentic morning-brief web app with a streaming backend and a React frontend.
 It gathers local weather, curated news headlines by user interests, and generates concise morning briefs.
 
 Core features:
@@ -54,3 +54,4 @@ Potential improvements (future):
 - Add CI workflow to run Python/JS linters and tests, and auto-deploy.
 
 Generated: May 18, 2026
+
