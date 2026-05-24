@@ -1,8 +1,8 @@
-# ◈ DailyBrief
+# ◈ Varta AI
 
 **Your agentic morning briefing app.**
 
-DailyBrief asks for your city, interests, and what you’re focused on, then uses Groq, weather, and news tools to generate a short morning brief with a live agent trace.
+Varta AI asks for your city, interests, and what you're focused on, then uses Groq, weather, and news tools to generate a short morning brief with a live agent trace.
 
 ## Stack
 
@@ -65,7 +65,7 @@ create table if not exists public.profiles (
 );
 ```
 
-3. (Optional) If you want the frontend (anon key) to read/update the `profiles` table directly, enable Row Level Security and add policies. See `migrations/001_create_profiles.sql` for an example and suggested policies.
+3. (Optional) If you want the frontend (anon key) to read/update the `profiles` table directly, enable Row Level Security and add policies. See `migrations/001_create_profiles.sql` for an example [...]
 
 4. Set environment variables locally:
 
@@ -99,8 +99,7 @@ npm install
 npm run dev
 ```
 
-6. In the frontend UI: sign in via the Auth component (magic link), open the email, click the link, then set your city in the Profile prompt. The app will save your city to Supabase and use it automatically when you generate briefs.
+6. In the frontend UI: sign in via the Auth component (magic link), open the email, click the link, then set your city in the Profile prompt. The app will save your city to Supabase and use it au[...]
 
 If you want, I can add a small migration runner or a CI step to apply `migrations/001_create_profiles.sql` automatically for you.
-
 
