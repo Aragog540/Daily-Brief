@@ -143,18 +143,6 @@ body {
 /* Ensure content sits above background visuals */
 .main, .footer { position: relative; z-index: 10; }
 
-.auth-stage {
-  min-height: calc(100vh - 190px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.auth-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 1rem;
-}
 
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 .main {
@@ -178,121 +166,6 @@ body {
   box-shadow: 0 20px 48px rgba(17, 24, 39, 0.07);
 }
 
-.auth {
-  width: min(100%, 540px);
-}
-
-.auth-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-  padding: 2rem;
-  background: rgba(255, 255, 255, 0.92);
-  border-radius: 20px;
-  border: 1px solid rgba(17, 24, 39, 0.07);
-  backdrop-filter: blur(14px) saturate(110%);
-  box-shadow: 0 20px 48px rgba(17, 24, 39, 0.07);
-}
-
-.auth-kicker {
-  font-size: 0.78rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: var(--accent-1);
-}
-
-.auth-title {
-  font-family: var(--serif);
-  font-size: 2.35rem;
-  line-height: 1.04;
-  letter-spacing: -0.02em;
-  font-weight: 400;
-  color: var(--ink);
-}
-
-.auth-copy {
-  color: var(--ink-2);
-  font-size: 0.98rem;
-  font-weight: 300;
-}
-
-.auth-tabs {
-  display: inline-flex;
-  padding: 0.3rem;
-  gap: 0.35rem;
-  border-radius: 999px;
-  background: rgba(17, 24, 39, 0.05);
-  width: fit-content;
-}
-
-.auth-tab {
-  border: 0;
-  background: transparent;
-  color: var(--ink-2);
-  font-family: var(--sans);
-  font-size: 0.82rem;
-  font-weight: 600;
-  padding: 0.55rem 0.9rem;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.auth-tab-active {
-  background: linear-gradient(90deg, #c2410c, #f59e0b);
-  color: #fffaf2;
-  box-shadow: 0 10px 20px rgba(194, 65, 12, 0.12);
-}
-
-.auth-picklist {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.auth-label {
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 500;
-  color: var(--ink-2);
-}
-
-.auth-toolbar .auth {
-  width: auto;
-}
-
-.auth-toolbar .auth-inner {
-  padding: 0;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  backdrop-filter: none;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.auth-toolbar .input {
-  width: 220px;
-}
-
-.auth-toolbar .auth-kicker,
-.auth-toolbar .auth-title,
-.auth-toolbar .auth-copy {
-  display: none;
-}
-
-.auth-actions {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-
-.auth-msg {
-  font-size: 0.82rem;
-  color: var(--ink-3);
-}
 
 .btn {
   font-family: var(--sans);
@@ -740,3 +613,585 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── E-Newspaper Layout Styles ────────────────────────────────────────────── */
+
+.newspaper-wrapper {
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.newspaper-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.newspaper-controls .btn {
+  font-family: Georgia, serif;
+  font-weight: bold;
+  border: 1px solid #1a1a1a;
+  background: transparent;
+  color: #1a1a1a;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.newspaper-controls .btn:hover {
+  background: #1a1a1a;
+  color: #faf6f0;
+}
+
+.newspaper-sheet {
+  background-color: #faf6f0;
+  color: #1a1a1a;
+  font-family: "Times New Roman", Georgia, serif;
+  border: 3px double #1a1a1a;
+  padding: 2.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.newspaper-header {
+  text-align: center;
+  border-bottom: 2px solid #1a1a1a;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.header-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.chronicle-title {
+  font-family: "Playfair Display", "Times New Roman", Georgia, serif;
+  font-size: 3.5rem;
+  margin: 0.5rem 0;
+  font-weight: normal;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.header-meta {
+  font-size: 0.85rem;
+  font-style: italic;
+  border-top: 1px solid #1a1a1a;
+  border-bottom: 1px solid #1a1a1a;
+  padding: 4px 0;
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.newspaper-advisory {
+  background-color: #fff0eb;
+  border: 1px solid #c2410c;
+  padding: 0.85rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem;
+  color: #c2410c;
+  text-align: center;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+
+.advisory-kicker {
+  text-transform: uppercase;
+}
+
+.newspaper-greeting {
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.italic-editorial {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  font-style: italic;
+  text-align: justify;
+  margin: 0;
+}
+
+.newspaper-grid {
+  display: grid;
+  gap: 2.5rem;
+}
+
+.newspaper-grid.two-column {
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .newspaper-grid.two-column {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+}
+
+.section-header {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 1.5rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 3px;
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.center-header {
+  text-align: center;
+}
+
+.col-editorial {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: #333;
+  margin-bottom: 1rem;
+  text-align: justify;
+}
+
+.events-list, .inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.newspaper-event-item {
+  display: flex;
+  gap: 1rem;
+  border-bottom: 1px dashed #ccc;
+  padding-bottom: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.event-item-time {
+  font-weight: bold;
+  color: #c2410c;
+  min-width: 70px;
+}
+
+.event-item-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.event-item-title {
+  color: #1a1a1a;
+}
+
+.event-item-loc {
+  font-size: 0.8rem;
+  color: #666;
+  margin-top: 2px;
+}
+
+.newspaper-email-item {
+  border-bottom: 1px dashed #ccc;
+  padding-bottom: 0.5rem;
+}
+
+.email-item-meta {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+}
+
+.email-item-from {
+  font-size: 0.8rem;
+  font-weight: bold;
+  color: #c2410c;
+  text-transform: uppercase;
+}
+
+.email-item-subject {
+  font-size: 0.95rem;
+  color: #1a1a1a;
+}
+
+.email-item-summary {
+  font-size: 0.85rem;
+  color: #444;
+  line-height: 1.4;
+  margin: 0;
+  text-align: justify;
+}
+
+.no-items-text {
+  font-size: 0.9rem;
+  font-style: italic;
+  color: #666;
+}
+
+.newspaper-news-section {
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.news-columns-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1.5rem !important;
+}
+
+.news-column-article {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #ccc;
+  padding-right: 1rem;
+}
+
+.news-column-article:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+
+@media (max-width: 600px) {
+  .news-column-article {
+    border-right: none;
+    padding-right: 0;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 1.5rem;
+  }
+  .news-column-article:last-child {
+    border-bottom: none;
+  }
+}
+
+.column-topic-title {
+  font-size: 1.15rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 2px;
+  margin-top: 0;
+  margin-bottom: 0.85rem;
+  text-align: center;
+}
+
+.news-article-item {
+  margin-bottom: 1rem;
+}
+
+.news-article-item:last-child {
+  margin-bottom: 0;
+}
+
+.news-article-title {
+  font-size: 0.98rem;
+  font-weight: bold;
+  margin: 0 0 2px 0;
+  line-height: 1.3;
+}
+
+.news-article-source {
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+}
+
+.news-article-summary {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 4px 0 0 0;
+  text-align: justify;
+}
+
+.newspaper-footer {
+  text-align: center;
+  margin-top: 2rem;
+}
+
+.thought-text {
+  font-size: 1.25rem;
+  font-style: italic;
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
+
+.editorial-signature {
+  font-size: 0.9rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 1.5rem;
+}
+
+.footer-copyright {
+  border-top: 1px solid #1a1a1a;
+  padding-top: 1rem;
+  color: #666;
+}
+
+/* ── Login screen customization ────────────────────────────────────────────── */
+
+.newspaper-login {
+  background-color: #faf6f0;
+  color: #1a1a1a;
+  border: 3px double #1a1a1a;
+  padding: 3rem;
+  max-width: 550px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.newspaper-brand {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.newspaper-kicker {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.newspaper-brand-title {
+  font-family: "Playfair Display", "Times New Roman", Georgia, serif;
+  font-size: 2.8rem;
+  text-transform: uppercase;
+  margin: 0.25rem 0;
+  line-height: 1;
+}
+
+.newspaper-brand-divider {
+  height: 2px;
+  background-color: #1a1a1a;
+  width: 60%;
+  margin: 0.5rem auto;
+}
+
+.newspaper-brand-tagline {
+  font-style: italic;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.newspaper-pitch {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  text-align: justify;
+  margin-bottom: 2rem;
+  color: #333;
+}
+
+.google-login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem;
+  font-size: 1.05rem;
+  font-weight: bold;
+  background-color: #1a1a1a;
+  color: #faf6f0;
+  border: 1px solid #1a1a1a;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.google-login-btn:hover {
+  background-color: transparent;
+  color: #1a1a1a;
+}
+
+.google-icon {
+  font-family: sans-serif;
+  font-size: 1.25rem;
+  background: white;
+  color: #1a1a1a;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.login-err {
+  margin-top: 1rem;
+  text-align: center;
+}
+
+/* ── Settings design improvements ────────────────────────────────────────── */
+
+.settings-panel {
+  background-color: #faf6f0 !important;
+  color: #1a1a1a !important;
+  border: 3px double #1a1a1a !important;
+}
+
+.settings-title {
+  font-family: "Playfair Display", "Times New Roman", Georgia, serif;
+  font-size: 2rem;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+  color: #1a1a1a;
+}
+
+.settings-sub {
+  font-family: "Times New Roman", Georgia, serif;
+  font-style: italic;
+  color: #555;
+  margin-top: 0;
+}
+
+.settings-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.field.half {
+  flex: 1;
+}
+
+.select-input {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%231a1a1a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  padding-right: 30px !important;
+}
+
+.checkbox-field {
+  margin-top: 0.5rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-family: "Times New Roman", Georgia, serif;
+}
+
+.checkbox-label input {
+  width: 18px;
+  height: 18px;
+  accent-color: #1a1a1a;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.settings-loading {
+  font-style: italic;
+  color: #666;
+  margin-bottom: 1rem;
+}
+
+.form-success {
+  color: #16a34a;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+/* ── Dashboard badge ────────────────────────────────────────────────────────── */
+
+.dashboard-profile-summary {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.summary-badge {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 0.85rem;
+  background: rgba(26, 26, 26, 0.06);
+  color: #1a1a1a;
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid rgba(26, 26, 26, 0.15);
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.summary-badge.interest {
+  background: transparent;
+  border-style: dashed;
+}
+
+.user-email-badge {
+  font-size: 0.85rem;
+  font-weight: bold;
+  background: rgba(255,255,255,0.2);
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  margin-right: 0.75rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.dashboard-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.newspaper-loading-screen {
+  text-align: center;
+  padding: 4rem 2rem;
+  background-color: #faf6f0;
+  border: 3px double #1a1a1a;
+  color: #1a1a1a;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.newspaper-loading-screen h2 {
+  font-family: "Playfair Display", "Times New Roman", Georgia, serif;
+  font-size: 1.8rem;
+  text-transform: uppercase;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.newspaper-loading-screen p {
+  font-family: "Times New Roman", Georgia, serif;
+  font-style: italic;
+  color: #555;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid rgba(26, 26, 26, 0.1);
+  border-top-color: #1a1a1a;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+

@@ -1,181 +1,94 @@
 import { useState, useEffect } from "react";
-import BriefForm from "./components/BriefForm";
-import AgentTrace from "./components/AgentTrace";
+import GoogleLogin from "./components/GoogleLogin";
+import SettingsPanel from "./components/SettingsPanel";
 import BriefOutput from "./components/BriefOutput";
-import "./index.css";
-import Auth from "./components/Auth";
-import { supabase } from "./supabaseClient";
-import BriefHistory from "./components/BriefHistory";
 import MadeBy from "./components/MadeBy";
-
-function parseInterests(value) {
-  if (Array.isArray(value)) return value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim());
-  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
-  return [];
-}
-
-function loadHistory(key) {
-  if (!key) return [];
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+import "./index.css";
 
 export default function App() {
+  const [email, setEmail] = useState(() => localStorage.getItem("vartaai-user-email") || "");
+  const [view, setView] = useState("dashboard"); // dashboard | settings | login
   const [phase, setPhase] = useState("idle"); // idle | running | done | error
-  const [traceEvents, setTraceEvents] = useState([]);
-  const [brief, setBrief] = useState("");
-  const [briefStructured, setBriefStructured] = useState([]);
-  const [weather, setWeather] = useState(null);
+  const [digest, setDigest] = useState(null);
   const [error, setError] = useState("");
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [profile, setProfile] = useState({ city: "", interests: [] });
-  const [history, setHistory] = useState([]);
-  const [activeHistoryId, setActiveHistoryId] = useState(null);
-  const historyKey = user?.id ? `vartaai-history-${user.id}` : null;
+  const [profile, setProfile] = useState(null);
+  const [focusToday, setFocusToday] = useState("");
 
+  const apiBase = import.meta.env.VITE_API_URL || "";
+
+  // 1. Process Google OAuth Redirect Callback parameter
   useEffect(() => {
-    const loadProfile = async () => {
-      if (!user) {
-        setProfile({ city: "", interests: [] });
-        return;
-      }
-      try {
-        const metadata = user.user_metadata || user.raw_user_meta_data || {};
-        const interests = parseInterests(metadata.interests || metadata.preferred_interests);
-        let city = metadata.city || metadata.preferred_city || "";
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('city')
-          .eq('user_id', user.id)
-          .single();
-        if (!city && !error && data) {
-          city = data.city || "";
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get("email");
+    if (emailParam) {
+      localStorage.setItem("vartaai-user-email", emailParam);
+      setEmail(emailParam);
+      // Clean query params from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // 2. Determine initial view gating
+  useEffect(() => {
+    if (!email) {
+      setView("login");
+    } else {
+      setView("dashboard");
+      // Fetch user profile info to check if they need to setup city
+      const checkProfile = async () => {
+        try {
+          const res = await fetch(`${apiBase}/settings?email=${encodeURIComponent(email)}`);
+          if (res.ok) {
+            const data = await res.json();
+            setProfile(data);
+            if (!data.city) {
+              // Redirect to settings for first setup
+              setView("settings");
+            }
+          } else {
+            // User entry doesn't exist yet, redirect to settings to initialize
+            setView("settings");
+          }
+        } catch (e) {
+          console.error("Error checking profile:", e);
         }
-        setProfile({ city, interests });
-      } catch (e) {
-        const metadata = user.user_metadata || user.raw_user_meta_data || {};
-        setProfile({
-          city: metadata.city || metadata.preferred_city || "",
-          interests: parseInterests(metadata.interests || metadata.preferred_interests),
-        });
-      }
-    };
-    loadProfile();
-  }, [user]);
-
-  useEffect(() => {
-    if (!historyKey) {
-      setHistory([]);
-      setActiveHistoryId(null);
-      return;
+      };
+      checkProfile();
     }
-    setHistory(loadHistory(historyKey));
-    setActiveHistoryId(null);
-  }, [historyKey]);
+  }, [email, apiBase]);
 
-  useEffect(() => {
-    if (!historyKey) return;
-    try {
-      localStorage.setItem(historyKey, JSON.stringify(history.slice(0, 12)));
-    } catch {
-      // ignore storage errors
-    }
-  }, [history, historyKey]);
+  const handleLogout = () => {
+    localStorage.removeItem("vartaai-user-email");
+    setEmail("");
+    setDigest(null);
+    setPhase("idle");
+    setView("login");
+  };
 
-  const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
-
-  const runBrief = async ({ focusToday }) => {
+  const handleGenerateDigest = async () => {
     setPhase("running");
-    setTraceEvents([]);
-    setBrief("");
-    setBriefStructured([]);
     setError("");
-    setActiveHistoryId(null);
-
-    const savedCity = profile.city || "";
-    const savedInterests = profile.interests || [];
-    let latestBrief = "";
-    let latestStructured = [];
-    let latestWeather = null;
-
+    setDigest(null);
     try {
-      const headers = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-
-      const res = await fetch(`${API_BASE}/brief`, {
+      const res = await fetch(`${apiBase}/brief`, {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          city: savedCity,
-          interests: savedInterests,
-          focus_today: focusToday,
+          email,
+          focus_today: focusToday.trim(),
         }),
       });
 
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (!raw) continue;
-
-            try {
-            const event = JSON.parse(raw);
-            if (event.type === "tool_call" || event.type === "tool_result") {
-              setTraceEvents((prev) => [...prev, event]);
-              if (event.type === "tool_result" && event.tool === "get_weather") {
-                latestWeather = event.result || null;
-                setWeather(latestWeather);
-              }
-              } else if (event.type === "brief_structured") {
-                latestStructured = event.items || [];
-                setBriefStructured(latestStructured);
-              } else if (event.type === "brief") {
-                latestBrief = event.content || "";
-                setBrief(latestBrief);
-                setPhase("done");
-            } else if (event.type === "error") {
-              setError(event.message);
-              setPhase("error");
-            } else if (event.type === "done") {
-              if (latestBrief) {
-                const entry = {
-                  id: crypto.randomUUID(),
-                  createdAt: new Date().toISOString(),
-                  city: savedCity,
-                  interests: savedInterests,
-                  focusToday: focusToday || "",
-                  content: latestBrief,
-                  structured: latestStructured,
-                  weather: latestWeather,
-                };
-                setHistory((prev) => [entry, ...prev.filter((item) => item.content !== latestBrief)].slice(0, 12));
-                setActiveHistoryId(entry.id);
-              }
-            }
-          } catch {
-            // skip malformed events
-          }
-        }
+      if (res.status === 401) {
+        throw new Error("Google access token has expired or is invalid. Please sign out and sign in again.");
       }
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setDigest(data);
+      setPhase("done");
     } catch (e) {
       setError(e.message || "Something went wrong.");
       setPhase("error");
@@ -184,31 +97,8 @@ export default function App() {
 
   const reset = () => {
     setPhase("idle");
-    setTraceEvents([]);
-    setBrief("");
-    setBriefStructured([]);
-    setWeather(null);
+    setDigest(null);
     setError("");
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    setToken(null);
-    setProfile({ city: "", interests: [] });
-    setHistory([]);
-    setActiveHistoryId(null);
-    reset();
-  };
-
-  const handleSelectHistory = (entry) => {
-    setBrief(entry.content || "");
-    setBriefStructured(entry.structured || []);
-    setWeather(entry.weather || null);
-    setPhase("done");
-    setError("");
-    setTraceEvents([]);
-    setActiveHistoryId(entry.id);
   };
 
   return (
@@ -217,59 +107,111 @@ export default function App() {
         <div className="bg-glow" />
         <div className="bg-grid" />
       </div>
+
       <header className="header">
         <div className="header-inner">
           <div className="logo">
             <span className="logo-mark">◈</span>
             <span className="logo-text">Varta AI</span>
           </div>
-          <p className="tagline">Your agentic morning intelligence</p>
-          {user && (
-            <button className="btn muted header-logout" onClick={handleLogout}>
-              Logout
-            </button>
+          <p className="tagline">Your morning newspaper intelligence</p>
+          {email && (
+            <div className="header-actions">
+              <span className="user-email-badge">{email}</span>
+              <button className="btn muted" onClick={handleLogout}>
+                Sign Out
+              </button>
+            </div>
           )}
         </div>
       </header>
 
       <main className="main">
-        {!user ? (
-          <section className="auth-stage">
-            <Auth onUser={(u, t) => { setUser(u); setToken(t); }} variant="landing" />
-          </section>
-        ) : (
-          <div className="workspace-layout">
-            <aside className="history-shell">
-              <BriefHistory
-                entries={history}
-                activeId={activeHistoryId}
-                onSelect={handleSelectHistory}
-              />
-            </aside>
+        {view === "login" && <GoogleLogin />}
 
-            <section className="workspace-main">
-              {phase === "idle" && (
-                <BriefForm onSubmit={runBrief} profile={profile} />
-              )}
-
-              {(phase === "running" || phase === "done") && (
-                <div className="workspace">
-                  <AgentTrace events={traceEvents} isRunning={phase === "running"} />
-                  {brief && <BriefOutput content={brief} structured={briefStructured} weather={weather} onReset={reset} />}
-                </div>
-              )}
-            </section>
-          </div>
+        {view === "settings" && (
+          <SettingsPanel
+            email={email}
+            onSaved={(p) => {
+              setProfile(p);
+              setView("dashboard");
+            }}
+            onClose={profile?.city ? () => setView("dashboard") : null}
+          />
         )}
 
-        {phase === "error" && (
-          <div className="error-state">
-            <p className="error-icon">⚠</p>
-            <p className="error-msg">{error}</p>
-            <button className="btn-reset" onClick={reset}>
-              Try again
-            </button>
-          </div>
+        {view === "dashboard" && (
+          <>
+            {phase === "idle" && (
+              <div className="dashboard-runform form-card">
+                <div className="form-header">
+                  <h1 className="form-title">The Daily Chronicle</h1>
+                  <p className="form-sub">Generate your bespoke daily newspaper print instantly.</p>
+                </div>
+
+                {profile && (
+                  <div className="dashboard-profile-summary">
+                    <span className="summary-badge">📍 {profile.city}</span>
+                    {profile.interests?.map((i) => (
+                      <span key={i} className="summary-badge interest">
+                        #{i}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="field">
+                  <label className="label">
+                    Focus of the Day <span className="label-hint">(optional)</span>
+                  </label>
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="e.g. key meetings, core tasks, presentation prep..."
+                    value={focusToday}
+                    onChange={(e) => setFocusToday(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleGenerateDigest()}
+                  />
+                </div>
+
+                <div className="dashboard-actions">
+                  <button className="btn-primary" onClick={handleGenerateDigest}>
+                    <span>Generate Chronicle</span>
+                    <span className="btn-arrow">→</span>
+                  </button>
+                  <button className="btn muted" onClick={() => setView("settings")}>
+                    Chronicle Settings
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {phase === "running" && (
+              <div className="newspaper-loading-screen">
+                <div className="spinner" />
+                <h2>Printing Your Morning Edition...</h2>
+                <p>Fetching forecast, calendar docket, and correspondence from Google.</p>
+              </div>
+            )}
+
+            {phase === "done" && (
+              <BriefOutput
+                digest={digest}
+                onReset={reset}
+                onOpenSettings={() => setView("settings")}
+              />
+            )}
+
+            {phase === "error" && (
+              <div className="error-state">
+                <p className="error-icon">⚠</p>
+                <p className="error-msg">{error}</p>
+                <button className="btn-reset" onClick={reset}>
+                  Try again
+                </button>
+              </div>
+            )}
+          </>
         )}
       </main>
 
@@ -280,4 +222,3 @@ export default function App() {
     </div>
   );
 }
-

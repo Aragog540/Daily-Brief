@@ -5,18 +5,23 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import httpx
 import random
-from datetime import datetime
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
+import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from groq import Groq
+import pytz
+
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from database import init_db, save_user_tokens, update_user_settings, get_user, get_all_users
 
 app = FastAPI(title="DailyBrief API")
 
@@ -34,136 +39,95 @@ NEWS_COUNTRY = "IN"
 GOOGLE_NEWS_HL = "en-IN"
 GOOGLE_NEWS_CEID = "IN:en"
 
+# Google OAuth Credentials
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback")
+
+SCOPES = [
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send"
+]
+
+client_config = {
+    "web": {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": [GOOGLE_REDIRECT_URI]
+    }
+}
+
+# ── Weather helpers ────────────────────────────────────────────────────────────
+
+def _temp_descriptor(temp: float) -> str:
+    if temp >= 40:
+        return "extremely hot"
+    if temp >= 35:
+        return "very hot"
+    if temp >= 30:
+        return "hot"
+    if temp >= 25:
+        return "warm"
+    if temp >= 20:
+        return "mild"
+    if temp >= 15:
+        return "cool"
+    return "cold"
 
 def build_weather_advice(max_temp=None, pop=None, condition=None, midday_hot=None, hot_hours=None):
-    """Return a short list of practical, varied weather advice lines.
-
-    Accepts optional `midday_hot` (bool) and `hot_hours` (list of ints)
-    so advice can be time-aware and more specific about when it's hottest.
-    """
     templates = []
-    # Base heuristics by max temperature
     if max_temp is not None:
         if max_temp >= 45:
             templates = [
                 "It's dangerously hot — avoid unnecessary outdoor time around midday.",
                 "Sip water frequently; seek air-conditioned or shaded breaks.",
                 "Light, breathable cotton or linen and broad-spectrum sunscreen are essential.",
-                "Postpone strenuous outdoor tasks until evening if possible.",
-            ]
-        elif max_temp >= 42:
-            templates = [
-                "Expect an extremely hot day; avoid direct sun where you can.",
-                "Stay hydrated with small, regular sips of water.",
-                "Wear breathable cotton/linen and use sunscreen.",
-                "Move heavy chores to cooler hours and rest often.",
             ]
         elif max_temp >= 40:
             templates = [
-                "Very hot today — avoid the midday sun (12–4 PM).",
+                "Very hot today — avoid direct sun in the afternoon.",
                 "Keep water nearby and take regular cooling breaks.",
                 "Choose lightweight clothes and strong sun protection.",
             ]
-        elif max_temp >= 35:
-            templates = [
-                "Warm to very warm — aim for early-morning or evening activity.",
-                "Wear light clothing and use sunscreen when outside.",
-                "Stay hydrated and rest in shade when possible.",
-            ]
         elif max_temp >= 30:
             templates = [
-                "Warm day — keep water handy and take breaks outdoors.",
-                "Light clothing and sun protection are a good idea.",
-                "Shift heavy work to cooler parts of the day if you can.",
+                "Warm day — keep water handy.",
+                "Light clothing is a good idea.",
             ]
-        elif max_temp >= 25:
+        elif max_temp >= 20:
             templates = [
-                "Mild weather — comfortable for most outdoor plans.",
-                "A light layer is probably sufficient; pack sunscreen if sunny.",
+                "Mild weather — comfortable for outdoor plans.",
+                "A light layer is probably sufficient.",
             ]
         else:
             templates = [
-                "Dress for the expected temperature.",
-                "Carry an umbrella if showers are likely.",
+                "Dress for the cold temperature.",
             ]
 
-    # Time-aware tweaks
     if midday_hot is True:
-        # make sure midday advice appears
         templates.insert(0, "Expect the hottest stretch around midday — avoid 12–4 PM if you can.")
     elif midday_hot is False and hot_hours:
-        # If hottest hours are not midday, give a precise heads-up
         try:
-            hrs = sorted(set(int(h) for h in hot_hours if isinstance(h, (int, float))))[:3]
+            hrs = sorted(set(int(h) for h in hot_hours))[:3]
             hr_text = ", ".join(f"{h}:00" for h in hrs)
             templates.append(f"Peak heat looks likely around {hr_text}; plan heavy work outside those hours.")
         except Exception:
             pass
 
-    # Rain-based additions
-    if pop is not None and pop >= 0.5:
-        templates.append("Carry an umbrella or rain jacket — heavy showers possible.")
-    elif pop is not None and pop >= 0.2:
-        templates.append("A light rain shower is possible; consider a compact umbrella.")
+    if pop is not None and pop >= 0.4:
+        templates.append("High probability of precipitation today. Carry an umbrella!")
 
-    # Condition-based additions
-    if condition:
-        c = condition.lower()
-        if "haze" in c or "smog" in c or "air quality" in c:
-            templates.append("If air quality is poor, limit outdoor exertion and consider a mask.")
-
-    # Choose up to 4 varied items
-    # Deduplicate exact strings while preserving order
-    seen = set()
-    unique = []
-    for t in templates:
-        if t not in seen:
-            unique.append(t)
-            seen.add(t)
-
-    # Collapse multiple 'midday/12-4' warnings into a single line
-    try:
-        midday_indices = [i for i, t in enumerate(unique) if re.search(r"\b(12\s*[–\-–—]?\s*4|12\s*PM|midday|midday sun)\b", t, re.I)]
-        if len(midday_indices) > 1:
-            # keep the first midday-related template, remove the rest
-            for idx in sorted(midday_indices[1:], reverse=True):
-                unique.pop(idx)
-    except Exception:
-        pass
-
-    count = min(4, len(unique))
-    try:
-        return random.sample(unique, count)
-    except Exception:
-        return unique[:count]
-
-
-def _temp_descriptor(max_temp: int | None) -> str:
-    """Return a short adjective describing the daytime temperature for summary phrasing."""
-    if max_temp is None:
-        return "temperatures"
-    if max_temp >= 45:
-        return "extremely scorching"
-    if max_temp >= 42:
-        return "extremely hot"
-    if max_temp >= 40:
-        return "very hot"
-    if max_temp >= 35:
-        return "very warm"
-    if max_temp >= 30:
-        return "warm"
-    if max_temp >= 25:
-        return "mild"
-    return "cool"
-
-# ── Tool implementations ──────────────────────────────────────────────────────
+    return templates
 
 def get_weather(city: str) -> dict:
-    # Enhanced weather: prefer Open-Meteo when configured, otherwise use OpenWeather One Call
     try:
-        # Prefer Open-Meteo (no API key) when requested
         if USE_OPEN_METEO:
-            # Geocode via Open-Meteo's geocoding API (no key required)
             geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(city)}&count=1&language=en&format=json"
             g = httpx.get(geo_url, timeout=8)
             g.raise_for_status()
@@ -175,7 +139,6 @@ def get_weather(city: str) -> dict:
             lon = results[0]["longitude"]
             name = results[0].get("name", city)
 
-            # Call Open-Meteo forecast
             om_url = (
                 f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
                 f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&hourly=temperature_2m&timezone=auto&current_weather=true"
@@ -192,31 +155,28 @@ def get_weather(city: str) -> dict:
             pops = daily.get("precipitation_probability_max", [])
             max_temp = round(maxs[0]) if maxs else None
             min_temp = round(mins[0]) if mins else None
-            pop = pops[0] / 100.0 if pops else None
+            pop = (pops[0] / 100.0) if pops else None
 
-            # Parse hourly temps to detect midday heat and hottest hours
             midday_hot = None
             hot_hours = []
             try:
                 hourly = omd.get("hourly", {})
                 times = hourly.get("time", [])
                 temps = hourly.get("temperature_2m", [])
-                hourly_pairs = list(zip(times, temps))
-                midday_temps = []
-                for tstr, temp in hourly_pairs:
+                for tstr, temp in zip(times, temps):
                     try:
-                        h = datetime.fromisoformat(tstr).hour
+                        h = datetime.datetime.fromisoformat(tstr).hour
                     except Exception:
                         continue
                     if 12 <= h < 16:
-                        midday_temps.append(temp)
+                        if midday_hot is None:
+                            midday_hot = temp >= 35
+                        else:
+                            midday_hot = midday_hot or (temp >= 35)
                     if temp is not None and temp >= 35:
                         hot_hours.append(h)
-                if midday_temps:
-                    midday_hot = max(midday_temps) >= 35
             except Exception:
-                midday_hot = None
-                hot_hours = []
+                pass
 
             summary_parts = []
             if max_temp is not None and min_temp is not None:
@@ -237,26 +197,17 @@ def get_weather(city: str) -> dict:
             return {
                 "city": name,
                 "temp_c": curr_temp,
-                "feels_like_c": None,
-                "condition": "",
-                "humidity": None,
-                "wind_kph": None,
                 "max_temp_c": max_temp,
                 "min_temp_c": min_temp,
-                "day_condition": "",
                 "summary": summary,
                 "advice": advice,
                 "current_time": curr_time,
                 "timezone": omd.get("timezone"),
-                "midday_hot": midday_hot,
-                "hot_hours": hot_hours,
             }
 
-        # Otherwise use OpenWeather (requires API key)
         if not WEATHER_API_KEY:
             return {"error": "OPENWEATHER_API_KEY not set"}
 
-        # 1) geocode city to lat/lon via OpenWeather
         geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={urllib.parse.quote(city)}&limit=1&appid={WEATHER_API_KEY}"
         g = httpx.get(geo_url, timeout=8)
         g.raise_for_status()
@@ -267,7 +218,6 @@ def get_weather(city: str) -> dict:
         lon = geo[0]["lon"]
         name = geo[0].get("name", city)
 
-        # 2) onecall for daily forecast (keep hourly for time-aware advice)
         one_url = (
             f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}"
             f"&exclude=minutely,alerts&units=metric&appid={WEATHER_API_KEY}"
@@ -281,57 +231,16 @@ def get_weather(city: str) -> dict:
         today = daily[0] if daily else {}
 
         temp_now = round(current.get("temp")) if current.get("temp") is not None else None
-        feels = round(current.get("feels_like")) if current.get("feels_like") is not None else None
-        cond = (current.get("weather") or [{}])[0].get("description", "")
-        # current local time from API (UTC + timezone_offset)
-        try:
-            tz_off = od.get("timezone_offset", 0) or 0
-            curr_dt = current.get("dt")
-            if curr_dt is not None:
-                current_time = datetime.utcfromtimestamp(curr_dt + tz_off).isoformat()
-            else:
-                current_time = None
-        except Exception:
-            current_time = None
-
+        day_weather = (today.get("weather") or [{}])[0].get("description", "")
         max_temp = round(today.get("temp", {}).get("max")) if today.get("temp") else None
         min_temp = round(today.get("temp", {}).get("min")) if today.get("temp") else None
-        # Parse hourly to detect midday heat
-        midday_hot = None
-        hot_hours = []
-        try:
-            hourly = od.get("hourly", []) or []
-            for hitem in hourly:
-                hdt = hitem.get("dt")
-                tmp = hitem.get("temp")
-                if hdt is None or tmp is None:
-                    continue
-                local_h = datetime.utcfromtimestamp(hdt + (od.get("timezone_offset", 0) or 0)).hour
-                if 12 <= local_h < 16:
-                    if midday_hot is None:
-                        midday_hot = tmp >= 35
-                    else:
-                        midday_hot = midday_hot or (tmp >= 35)
-                if tmp >= 35:
-                    hot_hours.append(local_h)
-        except Exception:
-            midday_hot = None
-            hot_hours = []
-        day_weather = (today.get("weather") or [{}])[0].get("description", "")
+        pop = today.get("pop")
 
-        # Interpretive summary
         summary_parts = []
         if max_temp is not None and min_temp is not None:
             desc = _temp_descriptor(max_temp)
             summary_parts.append(f"expected to be {desc} today, with highs near {max_temp}°C and lows around {min_temp}°C")
-        elif temp_now is not None:
-            summary_parts.append(f"around {temp_now}°C right now")
 
-        if day_weather:
-            summary_parts.append(f"Skies will likely be {day_weather}")
-
-        # rain chance estimate from pop
-        pop = today.get("pop")
         if pop is not None:
             if pop >= 0.5:
                 summary_parts.append("with a good chance of rain today")
@@ -341,135 +250,23 @@ def get_weather(city: str) -> dict:
                 summary_parts.append("with very little chance of rain")
 
         summary = ", ".join(summary_parts).strip().capitalize() + "."
-
-        # Advice bullets (time-aware)
-        advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=day_weather, midday_hot=midday_hot, hot_hours=hot_hours)
+        advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=day_weather)
 
         return {
             "city": name,
             "temp_c": temp_now,
-            "feels_like_c": feels,
-            "condition": cond,
-            "humidity": current.get("humidity"),
-            "wind_kph": round(current.get("wind_speed", 0) * 3.6) if current.get("wind_speed") is not None else None,
             "max_temp_c": max_temp,
             "min_temp_c": min_temp,
-            "day_condition": day_weather,
             "summary": summary,
             "advice": advice,
-            "current_time": current_time,
-                "timezone": od.get("timezone"),
-                "midday_hot": midday_hot,
-                "hot_hours": hot_hours,
+            "current_time": datetime.datetime.now().isoformat(),
+            "timezone": od.get("timezone"),
         }
-    except httpx.HTTPStatusError as e:
-        # If API key is invalid (401), fall back to the simpler current weather endpoint.
-        resp = getattr(e, "response", None)
-        status = getattr(resp, "status_code", None)
-        if status == 401:
-            # Try current weather endpoint first
-            try:
-                url = f"https://api.openweathermap.org/data/2.5/weather?q={urllib.parse.quote(city)}&appid={WEATHER_API_KEY}&units=metric"
-                r = httpx.get(url, timeout=8)
-                if r.status_code == 200:
-                    data = r.json()
-                    return {
-                        "city": data.get("name", city),
-                        "temp_c": round(data.get("main", {}).get("temp")) if data.get("main") else None,
-                        "feels_like_c": round(data.get("main", {}).get("feels_like")) if data.get("main") else None,
-                        "condition": (data.get("weather") or [{}])[0].get("description", ""),
-                        "humidity": data.get("main", {}).get("humidity"),
-                        "wind_kph": round(data.get("wind", {}).get("speed", 0) * 3.6) if data.get("wind") else None,
-                        "summary": f"{city} weather unavailable from detailed API; current conditions are {((data.get('weather') or [{}])[0].get('description','')).strip()}.",
-                        "advice": ["Weather data is limited; check local forecasts if you need precise timing."],
-                    }
-            except Exception:
-                pass
-
-            # Fall back to Open-Meteo (no API key required) using lat/lon
-            try:
-                om_url = (
-                    f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-                    f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&hourly=temperature_2m&timezone=auto&current_weather=true"
-                )
-                om = httpx.get(om_url, timeout=8)
-                om.raise_for_status()
-                omd = om.json()
-                current_weather = omd.get("current_weather", {})
-                curr_temp = round(current_weather.get("temperature")) if current_weather.get("temperature") is not None else None
-                curr_time = current_weather.get("time")
-                daily = omd.get("daily", {})
-                maxs = daily.get("temperature_2m_max", [])
-                mins = daily.get("temperature_2m_min", [])
-                pops = daily.get("precipitation_probability_max", [])
-                max_temp = round(maxs[0]) if maxs else None
-                min_temp = round(mins[0]) if mins else None
-                pop = pops[0] / 100.0 if pops else None
-
-                # parse hourly for midday-hot detection
-                midday_hot = None
-                hot_hours = []
-                try:
-                    hourly = omd.get("hourly", {})
-                    times = hourly.get("time", [])
-                    temps = hourly.get("temperature_2m", [])
-                    for tstr, temp in zip(times, temps):
-                        try:
-                            h = datetime.fromisoformat(tstr).hour
-                        except Exception:
-                            continue
-                        if 12 <= h < 16 and temp is not None:
-                            if midday_hot is None:
-                                midday_hot = temp >= 35
-                            else:
-                                midday_hot = midday_hot or (temp >= 35)
-                        if temp is not None and temp >= 35:
-                            hot_hours.append(h)
-                except Exception:
-                    midday_hot = None
-                    hot_hours = []
-
-                summary_parts = []
-                if max_temp is not None and min_temp is not None:
-                    if max_temp >= 42:
-                        summary_parts.append(f"expected to be extremely hot today, with temperatures around {max_temp}°C during the day and about {min_temp}°C at night")
-                    else:
-                        summary_parts.append(f"expected to reach around {max_temp}°C with lows near {min_temp}°C")
-
-                if pop is not None:
-                    if pop >= 0.5:
-                        summary_parts.append("with a good chance of rain today")
-                    elif pop >= 0.2:
-                        summary_parts.append("with some chance of showers")
-                    else:
-                        summary_parts.append("with very little chance of rain")
-
-                summary = ", ".join(summary_parts).strip().capitalize() + "."
-                advice = build_weather_advice(max_temp=max_temp, pop=pop, condition=None, midday_hot=midday_hot, hot_hours=hot_hours)
-
-                return {
-                    "city": city,
-                    "temp_c": curr_temp,
-                    "feels_like_c": None,
-                    "condition": "",
-                    "humidity": None,
-                    "wind_kph": None,
-                    "max_temp_c": max_temp,
-                    "min_temp_c": min_temp,
-                    "day_condition": "",
-                    "summary": summary,
-                    "advice": advice,
-                    "current_time": curr_time,
-                    "timezone": omd.get("timezone"),
-                    "midday_hot": midday_hot,
-                    "hot_hours": hot_hours,
-                }
-            except Exception:
-                return {"error": "weather_unavailable"}
-        return {"error": "weather_unavailable"}
-    except Exception:
+    except Exception as e:
+        print(f"Weather error: {e}")
         return {"error": "weather_unavailable"}
 
+# ── News helpers ──────────────────────────────────────────────────────────────
 
 def search_news(topic: str, count: int = 3) -> dict:
     try:
@@ -494,7 +291,6 @@ def search_news(topic: str, count: int = 3) -> dict:
             pub_date = (item.findtext("pubDate") or "").strip()
             if not title:
                 continue
-            # Clean up titles that include a trailing ' - SOURCE' to avoid duplicate source display
             suffix = f" - {source}"
             if title.endswith(suffix):
                 title = title[: -len(suffix)].strip()
@@ -506,582 +302,609 @@ def search_news(topic: str, count: int = 3) -> dict:
                 "published": pub_date[:16] if pub_date else "",
             })
 
-        return {"topic": topic, "articles": articles, "source": "google_news_rss", "country": NEWS_COUNTRY}
+        return {"topic": topic, "articles": articles}
     except Exception as e:
         return {"error": str(e)}
 
+# ── Google API helpers ─────────────────────────────────────────────────────────
 
-def get_day_context(date_str: str = None) -> dict:
-    now = datetime.now()
-    weekday = now.strftime("%A")
-    is_weekend = weekday in ("Saturday", "Sunday")
-    return {
-        "date": now.strftime("%B %d, %Y"),
-        "weekday": weekday,
-        "is_weekend": is_weekend,
-        "time_of_day": "morning",
-        "week_number": now.isocalendar()[1],
-    }
-
-
-# ── Tool registry ─────────────────────────────────────────────────────────────
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get current weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string", "description": "City name, e.g. 'Ahmedabad'"}
-                },
-                "required": ["city"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_news",
-            "description": "Search for recent news articles on a topic",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Topic to search news for"},
-                    "count": {"type": "integer", "description": "Number of articles (1-3)", "default": 3},
-                },
-                "required": ["topic"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_day_context",
-            "description": "Get today's date, weekday, and context",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date_str": {"type": "string", "description": "Optional date string"}
-                },
-            },
-        },
-    },
-]
-
-TOOL_MAP = {
-    "get_weather": get_weather,
-    "search_news": search_news,
-    "get_day_context": get_day_context,
-}
-
-
-BAD_BRIEF_PHRASES = [
-    "briefly summarize the three articles",
-    "leo tolstoy",
-    "wordpress",
-    "swappable batteries",
-    "digitalx agencies",
-    "today's news in a nutshell",
-    "game-changer",
-    "must-have",
-    "in a nutshell",
-    "productized",
-]
-
-
-def _clean_brief_text(text: str) -> str:
-    cleaned_lines = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip().strip('"')
-        lower = line.lower()
-
-        if not line:
-            cleaned_lines.append("")
-            continue
-
-        if any(phrase in lower for phrase in BAD_BRIEF_PHRASES):
-            continue
-
-        if line.startswith("[") and line.endswith("]"):
-            continue
-
-        cleaned_lines.append(line)
-
-    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()
-    return cleaned
-
-
-def _needs_rewrite(text: str) -> bool:
-    lower = text.lower()
-    if any(phrase in lower for phrase in BAD_BRIEF_PHRASES):
-        return True
-
-    bullet_lines = [line for line in text.splitlines() if line.lstrip().startswith(("-", "*"))]
-    if len(bullet_lines) < 3:
-        return True
-
-    if "thought for the day" not in lower:
-        return True
-
-    if "[" in text or "]" in text:
-        return True
-
-    return False
-
-
-def _fallback_brief(req) -> str:
-    focus = req.focus_today.strip() or "your top priority"
-    city = req.city.strip() or "your city"
-    hour = datetime.now().hour
-    if 5 <= hour < 12:
-        greeting = "Good morning"
-    elif 12 <= hour < 17:
-        greeting = "Good afternoon"
-    else:
-        greeting = "Good evening"
-    return (
-        f"{greeting} from {city}.\n\n"
-        f"- Start with {focus} before the day gets noisy.\n"
-        f"- Skim the headlines, then keep only the items that actually change your next move.\n"
-        f"- Leave the rest; momentum beats information overload.\n\n"
-        f"Thought for the day: Keep it simple, keep it moving."
+def get_credentials_for_user(email: str):
+    user_data = get_user(email)
+    if not user_data:
+        return None
+    
+    creds = Credentials(
+        token=user_data.get("access_token"),
+        refresh_token=user_data.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=SCOPES
     )
-
-
-def _assemble_brief_structured(req, messages) -> tuple[str, list[dict]]:
-    # New behavior: produce a top-20 headlines list prioritizing local (city) then country,
-    # and include up to 2 articles per user interest inside the top-20 (replace tail items if needed).
-
-    def _parse_rss_items(text, count):
+    
+    if creds.expired or not creds.valid:
         try:
-            root = ET.fromstring(text)
-        except Exception:
-            return []
-        channel = root.find("channel")
-        items = channel.findall("item") if channel is not None else []
-        out = []
-        for item in items[:count]:
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            source_el = item.find("source")
-            source = (source_el.text or "Google News") if source_el is not None else "Google News"
-            pub_date = (item.findtext("pubDate") or "").strip()
-            if not title:
-                continue
-            suffix = f" - {source}"
-            if title.endswith(suffix):
-                title = title[: -len(suffix)].strip()
-            out.append({"title": title, "url": link, "source": source, "published": pub_date[:16] if pub_date else ""})
-        return out
+            creds.refresh(Request())
+            save_user_tokens(email, creds.refresh_token, creds.token)
+        except Exception as e:
+            print(f"Failed to refresh Google token for {email}: {e}")
+            return None
+            
+    return creds
 
-    def fetch_local_headlines(city, count=20):
-        if not city:
-            return []
-        q = urllib.parse.quote(f"{city} when:1d")
-        url = f"https://news.google.com/rss/search?q={q}&hl={GOOGLE_NEWS_HL}&gl={NEWS_COUNTRY}&ceid={GOOGLE_NEWS_CEID}"
-        try:
-            r = httpx.get(url, timeout=8, follow_redirects=True)
-            r.raise_for_status()
-            return _parse_rss_items(r.text, count)
-        except Exception:
-            return []
-
-    def fetch_country_headlines(count=40):
-        url = f"https://news.google.com/rss?hl={GOOGLE_NEWS_HL}&gl={NEWS_COUNTRY}&ceid={GOOGLE_NEWS_CEID}"
-        try:
-            r = httpx.get(url, timeout=8, follow_redirects=True)
-            r.raise_for_status()
-            return _parse_rss_items(r.text, count)
-        except Exception:
-            return []
-
-    def fetch_interest_articles(topic, count=2):
-        res = search_news(topic, count)
-        if res.get("articles"):
-            return res.get("articles")
+def get_calendar_events_for_day(creds, timezone_name="Asia/Kolkata"):
+    try:
+        service = build("calendar", "v3", credentials=creds)
+        tz = pytz.timezone(timezone_name)
+        now = datetime.datetime.now(tz)
+        
+        start_of_today = datetime.datetime(now.year, now.month, now.day, 0, 0, 0, tzinfo=now.tzinfo)
+        end_of_today = datetime.datetime(now.year, now.month, now.day, 23, 59, 59, tzinfo=now.tzinfo)
+        
+        time_min = start_of_today.isoformat()
+        time_max = end_of_today.isoformat()
+        
+        events_result = service.events().list(
+            calendarId="primary",
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+        
+        events = events_result.get("items", [])
+        
+        formatted_events = []
+        for event in events:
+            start = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
+            summary = event.get("summary", "No Title")
+            location = event.get("location", "")
+            
+            time_str = "All Day"
+            if "dateTime" in event.get("start", {}):
+                # Parsing string like 2026-07-05T14:30:00+05:30
+                try:
+                    dt = datetime.datetime.fromisoformat(start)
+                    time_str = dt.strftime("%I:%M %p")
+                except Exception:
+                    time_str = "Scheduled"
+                
+            formatted_events.append({
+                "title": summary,
+                "time": time_str,
+                "location": location
+            })
+            
+        return formatted_events
+    except Exception as e:
+        print(f"Calendar fetch error: {e}")
         return []
 
-    city = (req.city or "").strip()
-    interests = list(dict.fromkeys([i.strip() for i in (req.interests or []) if i.strip()]))[:5]
+def get_recent_emails(creds):
+    try:
+        service = build("gmail", "v3", credentials=creds)
+        results = service.users().messages().list(
+            userId="me",
+            labelIds=["INBOX"],
+            maxResults=10,
+            q="category:primary"
+        ).execute()
+        
+        messages = results.get("messages", [])
+        emails = []
+        
+        for msg in messages:
+            msg_data = service.users().messages().get(userId="me", id=msg["id"]).execute()
+            headers = msg_data.get("payload", {}).get("headers", [])
+            
+            subject = "No Subject"
+            sender = "Unknown Sender"
+            for h in headers:
+                if h["name"].lower() == "subject":
+                    subject = h["value"]
+                elif h["name"].lower() == "from":
+                    sender = h["value"]
+                    
+            snippet = msg_data.get("snippet", "")
+            
+            emails.append({
+                "from": sender,
+                "subject": subject,
+                "snippet": snippet
+            })
+            
+        return emails
+    except Exception as e:
+        print(f"Gmail fetch error: {e}")
+        return []
 
-    # 1) local headlines (prefer a small local slice, but never exceed 10)
-    local = fetch_local_headlines(city, count=20)
+# ── Groq digest generator ──────────────────────────────────────────────────────
 
-    # 2) country headlines (India-level pool)
-    country = fetch_country_headlines(count=60)
-
-    # 3) interest articles: fetch globally (not constrained to local) up to 3 each
-    def fetch_interest_articles_global(topic, count=3):
-        try:
-            q = urllib.parse.quote(topic)
-            url = f"https://news.google.com/rss/search?q={q}%20when%3A1d&hl=en&ceid=US:en"
-            r = httpx.get(url, timeout=8, follow_redirects=True)
-            r.raise_for_status()
-            return _parse_rss_items(r.text, count)
-        except Exception:
-            return []
-
-    # target distribution: prefer 6 local, then interest articles (3 per interest), fill remaining with India headlines
-    preferred_local = 6
-    local_limit = min(10, 20)
-    local_selected = []
-    seen = set()
-
-    # pick up to preferred_local (but not exceeding local_limit)
-    for a in local[:min(preferred_local, local_limit)]:
-        key = (a.get("title"), a.get("url"))
-        if key in seen:
-            continue
-        seen.add(key)
-        local_selected.append(a)
-
-    # gather interest articles (3 each) globally
-    interest_articles = []
-    for topic in interests:
-        arts = fetch_interest_articles_global(topic, count=3)
-        for art in arts:
-            key = (art.get("title"), art.get("url"))
-            if key not in seen:
-                interest_articles.append(art)
-                seen.add(key)
-
-    # build final list: start with local_selected, then interest_articles, then fill with country headlines
-    final = []
-    final.extend(local_selected)
-    final.extend(interest_articles)
-
-    for a in country:
-        if len(final) >= 20:
-            break
-        key = (a.get("title"), a.get("url"))
-        if key in seen:
-            continue
-        seen.add(key)
-        final.append(a)
-
-    # ensure exactly 20 items max
-    final = final[:20]
-
-    # Greeting using any available weather from messages (time-aware)
-    weather = None
-    for m in messages:
-        if m.get("role") == "tool":
-            try:
-                content = json.loads(m.get("content") or "{}")
-            except Exception:
-                continue
-            if isinstance(content, dict) and ("temp_c" in content or "condition" in content or "current_time" in content):
-                weather = content
-                break
-
-    # Determine local time (prefer weather current_time or timezone if available)
-    local_dt = None
-    # If weather doesn't provide timezone, try geocoding city to find timezone
-    if (not weather or not weather.get("timezone")) and city:
-        try:
-            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(city)}&count=1&language=en"
-            gg = httpx.get(geo_url, timeout=6)
-            gg.raise_for_status()
-            gj = gg.json() or {}
-            res = gj.get("results") or []
-            if res and not weather:
-                # if we have no weather object yet, populate minimal timezone
-                weather = {"timezone": res[0].get("timezone")}
-            elif res and weather and not weather.get("timezone"):
-                weather["timezone"] = res[0].get("timezone")
-        except Exception:
-            pass
-    if weather and weather.get("current_time"):
-        try:
-            # parse ISO time from weather; may be naive (local) or include offset
-            local_dt = datetime.fromisoformat(weather.get("current_time"))
-            # attach timezone info if provided
-            if weather.get("timezone") and ZoneInfo is not None:
-                try:
-                    local_dt = local_dt.replace(tzinfo=ZoneInfo(weather.get("timezone")))
-                except Exception:
-                    pass
-        except Exception:
-            local_dt = None
-    if local_dt is None and weather and weather.get("timezone") and ZoneInfo is not None:
-        try:
-            local_dt = datetime.now(ZoneInfo(weather.get("timezone")))
-        except Exception:
-            local_dt = None
-    if local_dt is None:
-        local_dt = datetime.now()
-
-    hour = local_dt.hour
-    if 5 <= hour < 12:
-        greeting_word = "Good morning"
-    elif 12 <= hour < 17:
-        greeting_word = "Good afternoon"
-    else:
-        # Late night / early morning
-        greeting_word = "Good evening"
-
-    # Compose greeting with current temp if available
-    if weather and weather.get("temp_c") is not None:
-        greeting = f"{greeting_word} — {city or weather.get('city','your city')} is {weather['temp_c']}°C and {weather.get('condition','clear')}.\n"
-    elif weather and weather.get("summary"):
-        greeting = f"{greeting_word} — {weather.get('summary')}\n"
-    else:
-        greeting = f"{greeting_word} — here's your quick brief for {city or 'your city'}.\n"
-
-    # Add generated timestamp (local)
-    gen_time = local_dt.strftime("%I:%M %p").lstrip("0")
-    greeting += f"Generated at {gen_time}\n"
-
-    # Adjust summary wording for night readers: mention tonight/tomorrow when appropriate
-    if weather:
-        max_t = weather.get("max_temp_c")
-        min_t = weather.get("min_temp_c")
-        # If reading at night, prefer 'Tonight'/'Tomorrow' phrasing
-        if hour < 6 or hour >= 20:
-            if min_t is not None and max_t is not None:
-                night_summary = f"Tonight: lows around {min_t}°C. Tomorrow expect highs near {max_t}°C."
-                # prepend to greeting summary area
-                greeting = f"{greeting}\n{night_summary}\n"
-        else:
-            # keep existing weather summary as-is (if provided)
-            if weather.get("summary"):
-                # ensure summary ends with a period
-                s = weather.get("summary").strip()
-                if not s.endswith("."):
-                    s = s + "."
-                greeting = f"{greeting}\n{s}\n"
-
-        # Append a few concise weather advice lines when available
-        if weather.get("advice"):
-            # ensure a separating newline
-            if not greeting.endswith("\n"):
-                greeting += "\n"
-            for adv in weather.get("advice")[:4]:
-                greeting += f"{adv}\n"
-
-    # Build numbered headlines
-    lines = [greeting, ""]
-    for i, a in enumerate(final[:20], start=1):
-        title = a.get("title")
-        src = a.get("source", "")
-        date = a.get("published", "")
-        lines.append(f"{i}. {title} — {src} {date}".strip())
-
-    # If any interests had no updates, we leave the top list as-is (country headlines fill the gaps)
-
-    lines.append("")
-    lines.append(f"Thought for the day: Focus on {req.focus_today or 'one clear outcome'} and ship.")
-
-    return "\n".join(lines), final
-
-
-def _assemble_brief_from_tools(req, messages) -> str:
-    """Compatibility wrapper used by tests and older callers: returns only text."""
-    text, _items = _assemble_brief_structured(req, messages)
-    return text
-
-
-def _rewrite_brief(req, user_message: str, draft: str, messages) -> str:
-    tool_notes = []
-    for message in messages:
-        if message.get("role") == "tool":
-            tool_notes.append(message.get("content", ""))
-
-    rewrite_prompt = (
-        "Rewrite the draft into a clean, useful morning brief. "
-        "Use the user's city, interests, focus, and the tool results only. "
-        "Remove anything unrelated, dramatic, or invented. "
-        "Never include literary quotes, placeholders, product pitches, generic investment advice, or article-summary stubs. "
-        "Output only the final brief in plain text.\n\n"
-        "Required format:\n"
-        "- One short greeting line tied to the day or weather.\n"
-        "- 3 concise bullet points grouped by the user's interests.\n"
-        "- One short thought for the day that is practical and original.\n"
-        "- Keep it under 220 words.\n\n"
-        f"User message: {user_message}\n\n"
-        f"Tool results: {json.dumps(tool_notes, ensure_ascii=False)}\n\n"
-        f"Draft to rewrite: {draft}"
+def generate_groq_digest(city, weather, calendar, gmail, news, focus):
+    system_prompt = (
+        "You are the master editor of 'The Daily AI Chronicle', a premium, highly personalized morning newspaper.\n"
+        "Your task is to take raw inputs (weather details, calendar meetings, recent email snippets, news articles, and user focus) "
+        "and draft a high-quality newspaper edition in JSON format.\n\n"
+        "Guidelines:\n"
+        "- Assess the weather details. If precipitation, rain, or adverse conditions are forecast, write a friendly warning advisory (e.g. 'Heavy rain expected in evening. Carry an umbrella!', 'Carry an umbrella!').\n"
+        "- Summarize the calendar events into a short editorial highlight column ('calendar_editorial') and return the formatted event items.\n"
+        "- Analyze the email snippets for key threads, flight tickets, urgent reminders. Summarize into a correspondence highlight column ('inbox_editorial') and list key email items.\n"
+        "- Summarize the news articles by topic in a brief journalistic style.\n"
+        "- Ensure the tone is elegant, slightly vintage/witty, and professional.\n"
+        "- The output must be valid JSON matching the schema.\n\n"
+        "Required JSON schema:\n"
+        "{\n"
+        "  \"greeting\": \"A short editor greeting (e.g. Good morning Ahmedabad. A warm day is ahead...)\",\n"
+        "  \"advisory\": \"Weather warning/advice, or empty if none\",\n"
+        "  \"calendar_editorial\": \"Short editorial text highlighting the day's schedule\",\n"
+        "  \"calendar_items\": [{\"time\": \"time\", \"title\": \"event title\", \"location\": \"location or empty\"}],\n"
+        "  \"inbox_editorial\": \"Short editorial text summarizing email activity\",\n"
+        "  \"inbox_items\": [{\"from\": \"sender name\", \"subject\": \"email subject\", \"summary\": \"1-sentence summary of content\"}],\n"
+        "  \"news_columns\": [{\"topic\": \"topic\", \"articles\": [{\"title\": \"title\", \"source\": \"source\", \"summary\": \"1-sentence summary of news\"}]}],\n"
+        "  \"thought_of_the_day\": \"An inspiring or witty closing quote/thought\"\n"
+        "}"
     )
+    
+    user_content = json.dumps({
+        "city": city,
+        "weather": weather,
+        "calendar": calendar,
+        "gmail": gmail,
+        "news": news,
+        "focus_today": focus
+    })
+    
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.35,
+            max_tokens=2000
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error calling Groq client: {e}")
+        return {
+            "greeting": f"Good morning. Welcome to your daily brief.",
+            "advisory": "",
+            "calendar_editorial": "No schedule details available.",
+            "calendar_items": [],
+            "inbox_editorial": "No email summaries available.",
+            "inbox_items": [],
+            "news_columns": [],
+            "thought_of_the_day": "Carpe Diem."
+        }
 
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": "You rewrite brief copy with strict constraints and no fluff."},
-            {"role": "user", "content": rewrite_prompt},
-        ],
-        max_tokens=450,
-        temperature=0.2,
+# ── Email Delivery helpers ─────────────────────────────────────────────────────
+
+def render_newspaper_html(digest, city):
+    date_str = datetime.datetime.now().strftime("%A, %B %d, %Y")
+    time_str = datetime.datetime.now().strftime("%I:%M %p")
+    
+    advisory_html = ""
+    if digest.get("advisory"):
+        advisory_html = f'<div class="advisory-box">ADVISORY: {digest["advisory"]}</div>'
+        
+    calendar_events_html = ""
+    if digest.get("calendar_items"):
+        for item in digest["calendar_items"]:
+            loc_str = f" ({item['location']})" if item.get('location') else ""
+            calendar_events_html += f'<div class="event-row"><span class="event-time">{item["time"]}</span> {item["title"]}{loc_str}</div>'
+    else:
+        calendar_events_html = '<div class="event-row" style="color: #666;">No scheduled events for today.</div>'
+        
+    inbox_emails_html = ""
+    if digest.get("inbox_items"):
+        for item in digest["inbox_items"]:
+            inbox_emails_html += f'<div class="event-row"><strong style="color: #C2410C;">From: {item["from"]}</strong> - {item["subject"]} <br><span style="font-size: 11px; color: #555; font-style: italic;">{item["summary"]}</span></div>'
+    else:
+        inbox_emails_html = '<div class="event-row" style="color: #666;">No recent unread messages.</div>'
+        
+    news_html = ""
+    if digest.get("news_columns"):
+        for col in digest["news_columns"]:
+            news_html += f'<h3 style="font-size: 15px; border-bottom: 1px dotted #1A1A1A; margin-top: 15px; padding-bottom: 2px; text-transform: uppercase;">{col["topic"]}</h3>'
+            for art in col.get("articles", []):
+                news_html += f'<div class="article"><div class="article-title">{art["title"]}</div><div class="article-meta">Source: {art.get("source", "News")}</div><div class="article-body">{art.get("summary", "")}</div></div>'
+                
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{
+            background-color: #F6F3EB;
+            color: #1A1A1A;
+            font-family: 'Times New Roman', Georgia, serif;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 650px;
+            margin: 0 auto;
+            border: 3px double #1A1A1A;
+            padding: 20px;
+            background-color: #FAF7F0;
+        }}
+        .header {{
+            text-align: center;
+            border-bottom: 2px solid #1A1A1A;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }}
+        .header h1 {{
+            font-size: 34px;
+            margin: 0 0 5px 0;
+            font-weight: normal;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }}
+        .header .meta {{
+            font-size: 13px;
+            font-style: italic;
+            border-top: 1px solid #1A1A1A;
+            border-bottom: 1px solid #1A1A1A;
+            padding: 4px 0;
+            margin-top: 5px;
+            display: flex;
+            justify-content: space-between;
+        }}
+        .advisory-box {{
+            background-color: #FFF0EB;
+            border: 1px solid #C2410C;
+            padding: 10px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #C2410C;
+            font-weight: bold;
+            text-align: center;
+        }}
+        .section-title {{
+            font-size: 18px;
+            text-transform: uppercase;
+            border-bottom: 1px solid #1A1A1A;
+            padding-bottom: 2px;
+            margin-top: 25px;
+            margin-bottom: 10px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }}
+        .article {{
+            margin-bottom: 15px;
+            line-height: 1.5;
+        }}
+        .article-title {{
+            font-size: 15px;
+            font-weight: bold;
+            margin-bottom: 2px;
+        }}
+        .article-meta {{
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 4px;
+        }}
+        .article-body {{
+            font-size: 13px;
+            text-align: justify;
+        }}
+        .event-row {{
+            font-size: 13px;
+            margin-bottom: 8px;
+            border-bottom: 1px dashed #DDD;
+            padding-bottom: 4px;
+            line-height: 1.4;
+        }}
+        .event-time {{
+            font-weight: bold;
+            color: #C2410C;
+            display: inline-block;
+            width: 80px;
+        }}
+        .footer {{
+            text-align: center;
+            border-top: 1px solid #1A1A1A;
+            margin-top: 30px;
+            padding-top: 15px;
+            font-size: 14px;
+            font-style: italic;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>The Daily AI Chronicle</h1>
+            <div class="meta">
+                <span>Vol. II · No. 24</span>
+                <span>{date_str}</span>
+                <span>{city} Edition</span>
+            </div>
+        </div>
+        
+        {advisory_html}
+        
+        <div class="article">
+            <p style="font-size: 14px; font-style: italic; line-height: 1.5; margin: 0 0 15px 0;">{digest.get("greeting")}</p>
+        </div>
+        
+        <div class="section-title">The Daily Docket (Calendar)</div>
+        <div class="article">
+            <p class="article-body" style="margin-bottom: 10px;">{digest.get("calendar_editorial")}</p>
+            {calendar_events_html}
+        </div>
+        
+        <div class="section-title">The Correspondence Desk (Inbox)</div>
+        <div class="article">
+            <p class="article-body" style="margin-bottom: 10px;">{digest.get("inbox_editorial")}</p>
+            {inbox_emails_html}
+        </div>
+        
+        <div class="section-title">Chronicles & Headlines</div>
+        {news_html}
+        
+        <div class="footer">
+            <p>"{digest.get("thought_of_the_day")}"</p>
+            <small style="color: #888; font-size: 10px;">Delivered at {time_str}. Generated by Varta AI.</small>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+def send_digest_email(creds, email_address, subject, html_content):
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    
+    try:
+        service = build("gmail", "v3", credentials=creds)
+        
+        message = MIMEMultipart("alternative")
+        message["to"] = email_address
+        message["from"] = "me"
+        message["subject"] = subject
+        
+        part = MIMEText(html_content, "html")
+        message.attach(part)
+        
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        service.users().messages().send(
+            userId="me",
+            body={"raw": raw_message}
+        ).execute()
+        return True
+    except Exception as e:
+        print(f"Gmail send API error: {e}")
+        return False
+
+def generate_and_send_digest_email_sync(email: str):
+    creds = get_credentials_for_user(email)
+    if not creds:
+        print(f"[Sync] Credentials missing for {email}")
+        return
+        
+    user_settings = get_user(email)
+    city = user_settings.get("city") or "Ahmedabad"
+    interests_str = user_settings.get("interests") or "Technology"
+    interests = [i.strip() for i in interests_str.split(",") if i.strip()]
+    timezone_name = user_settings.get("timezone") or "Asia/Kolkata"
+    
+    weather_info = get_weather(city)
+    calendar_events = get_calendar_events_for_day(creds, timezone_name)
+    gmail_emails = get_recent_emails(creds)
+    
+    news_articles = []
+    for interest in interests[:3]:
+        articles = search_news(interest)
+        if articles and "articles" in articles:
+            news_articles.append({
+                "topic": interest,
+                "articles": articles["articles"][:3]
+            })
+            
+    digest = generate_groq_digest(city, weather_info, calendar_events, gmail_emails, news_articles, "")
+    html_content = render_newspaper_html(digest, city)
+    
+    date_str = datetime.datetime.now().strftime("%B %d, %Y")
+    subject = f"The Morning Chronicle — {date_str}"
+    
+    send_digest_email(creds, email, subject, html_content)
+
+# ── API Routes ─────────────────────────────────────────────────────────────────
+
+@app.get("/auth/login")
+def auth_login():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google client credentials are not configured in environment.")
+    
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=GOOGLE_REDIRECT_URI
     )
+    
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true"
+    )
+    
+    return {"url": authorization_url}
 
-    rewritten = response.choices[0].message.content or draft
-    rewritten = _clean_brief_text(rewritten)
-    return rewritten if rewritten else _fallback_brief(req)
+@app.get("/auth/callback")
+async def auth_callback(code: str, state: str = None):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google credentials not configured")
+    
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=GOOGLE_REDIRECT_URI
+    )
+    
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    
+    # Get user email
+    async with httpx.AsyncClient() as http_client:
+        res = await http_client.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {creds.token}"}
+        )
+        if res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch user info from Google")
+        user_info = res.json()
+        email = user_info.get("email")
+        
+    if not email:
+        raise HTTPException(status_code=400, detail="Google response did not return an email address")
+    
+    # Save tokens to database
+    save_user_tokens(email, creds.refresh_token, creds.token)
+    
+    frontend_url = os.environ.get("VITE_FRONTEND_URL", "http://localhost:5173")
+    redirect_target = f"{frontend_url}/?email={urllib.parse.quote(email)}"
+    
+    return RedirectResponse(redirect_target)
 
+class SettingsRequest(BaseModel):
+    email: str
+    city: str
+    interests: list[str] = Field(default_factory=list)
+    delivery_time: str
+    timezone: str
+    enabled: bool
 
-def _has_news_content(text: str, interests: list[str]) -> bool:
-    lower = text.lower()
-    return any(topic.lower() in lower for topic in interests)
+@app.post("/settings")
+def save_settings(req: SettingsRequest):
+    interests_str = ", ".join([i.strip() for i in req.interests if i.strip()])
+    update_user_settings(
+        req.email,
+        req.city,
+        interests_str,
+        req.delivery_time,
+        req.timezone,
+        req.enabled
+    )
+    return {"status": "ok"}
 
-
-# ── Request model ─────────────────────────────────────────────────────────────
+@app.get("/settings")
+def get_settings(email: str):
+    user_settings = get_user(email)
+    if not user_settings:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    interests_list = [i.strip() for i in user_settings.get("interests", "").split(",") if i.strip()]
+    
+    return {
+        "email": user_settings.get("email"),
+        "city": user_settings.get("city") or "",
+        "interests": interests_list,
+        "delivery_time": user_settings.get("delivery_time") or "07:00",
+        "timezone": user_settings.get("timezone") or "Asia/Kolkata",
+        "enabled": bool(user_settings.get("enabled", 1))
+    }
 
 class BriefRequest(BaseModel):
-    city: str = ""
-    interests: list[str] = Field(default_factory=list)
+    email: str
+    city_override: str = ""
+    interests_override: list[str] = Field(default_factory=list)
     focus_today: str = ""
-
 
 @app.post("/brief")
 async def generate_brief(req: BriefRequest):
-    interests = list(dict.fromkeys([i.strip() for i in (req.interests or []) if i.strip()]))[:5]
-    interests_str = ", ".join(interests)
-
-    system_prompt = (
-        "You are a sharp, warm morning briefing agent. "
-        "Use the available tools to gather context, then write a personalized morning brief. "
-        "The news scope is India only. Use India-only news results and do not mention other regions. "
-        "You MUST do this exactly:\n"
-        "1. Call get_day_context first.\n"
-        "2. Call get_weather with the user's city.\n"
-        "3. Call search_news once for each interest, up to 3 total, using India-only news.\n"
-        "4. After tool calls finish, write the final brief.\n\n"
-        "Hard rules:\n"
-        "- Use only facts from the tools and user input. Do not invent products, quotes, or side topics.\n"
-        "- Never output placeholders like '[briefly summarize the three articles]'.\n"
-        "- Never include literary quotes, generic investment tips, or random startup ads.\n"
-        "- Keep it practical, specific, and friendly.\n"
-        "- Keep the final answer under 220 words.\n\n"
-        "Required format:\n"
-        "- One short greeting line tied to the day or weather.\n"
-        "- Exactly 3 concise bullets, one per interest, using the news results.\n"
-        "- One short thought for the day that is original and relevant.\n"
-        "- Tone: warm, direct, lightly witty, never robotic.\n"
-        "- Never use the word 'delve'."
-    )
-
-    user_message = (
-        f"My city: {req.city}. "
-        f"My interests: {interests_str or 'general news'}. "
-        f"What I'm focused on today: {req.focus_today or 'general productivity'}. "
-        "Please run your tools and give me my morning brief."
-    )
-
-    messages = [{"role": "user", "content": user_message}]
-
-    async def stream():
-        # Agent loop — max 8 iterations to stay within free tier limits
-        for _ in range(8):
-            response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[{"role": "system", "content": system_prompt}] + messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=800,
-                temperature=0.3,
-            )
-
-            msg = response.choices[0].message
-            finish_reason = response.choices[0].finish_reason
-
-            # Stream tool calls as trace events
-            if msg.tool_calls:
-                for tc in msg.tool_calls:
-                    fn_name = tc.function.name
-                    raw_args = tc.function.arguments or "{}"
-                    try:
-                        fn_args = json.loads(raw_args)
-                    except Exception:
-                        fn_args = {}
-
-                    if not isinstance(fn_args, dict):
-                        fn_args = {}
-
-                    # Send trace event to frontend
-                    trace = json.dumps({
-                        "type": "tool_call",
-                        "tool": fn_name,
-                        "args": fn_args,
-                    })
-                    yield f"data: {trace}\n\n"
-
-                    # Execute the tool
-                    tool = TOOL_MAP.get(fn_name)
-                    if tool is None:
-                        result = {"error": f"Unknown tool: {fn_name}"}
-                    else:
-                        try:
-                            result = tool(**fn_args)
-                        except TypeError:
-                            result = tool()
-
-                    # Send result trace
-                    result_trace = json.dumps({
-                        "type": "tool_result",
-                        "tool": fn_name,
-                        "result": result,
-                    })
-                    yield f"data: {result_trace}\n\n"
-
-                    # Add to message history
-                    messages.append({"role": "assistant", "content": None, "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": fn_name, "arguments": tc.function.arguments},
-                        }
-                    ]})
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(result),
-                    })
-
-            # Final text response
-            if finish_reason == "stop" and msg.content:
-                final_text = _clean_brief_text(msg.content)
-                assembled_text, assembled_items = _assemble_brief_structured(req, messages)
-                if assembled_text:
-                    final_text = assembled_text
-                elif _needs_rewrite(final_text):
-                    final_text = _rewrite_brief(req, user_message, final_text, messages)
-
-                if _needs_rewrite(final_text) or not _has_news_content(final_text, interests):
-                    final_text = _fallback_brief(req)
-
-                final = json.dumps({"type": "brief", "content": final_text})
-                yield f"data: {final}\n\n"
-
-                # Emit structured brief (items with title/url/source) if available
-                try:
-                    struct = json.dumps({"type": "brief_structured", "items": assembled_items})
-                    yield f"data: {struct}\n\n"
-                except Exception:
-                    pass
-                yield "data: {\"type\": \"done\"}\n\n"
-                return
-
-            # If no tool calls and no content, something went wrong
-            if not msg.tool_calls and not msg.content:
-                yield "data: {\"type\": \"error\", \"message\": \"Agent produced no output\"}\n\n"
-                return
-
-        yield "data: {\"type\": \"error\", \"message\": \"Agent loop limit reached\"}\n\n"
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
-
+    email = req.email
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+        
+    creds = get_credentials_for_user(email)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google authentication required")
+        
+    user_settings = get_user(email)
+    if not user_settings:
+        # Save a placeholder user entry since they already authorized Google
+        save_user_tokens(email, None, creds.token)
+        user_settings = get_user(email)
+        
+    city = req.city_override or user_settings.get("city") or "Ahmedabad"
+    interests_list = req.interests_override or [i.strip() for i in (user_settings.get("interests") or "Technology").split(",") if i.strip()]
+    timezone_name = user_settings.get("timezone") or "Asia/Kolkata"
+    
+    # 1. Fetch weather
+    weather_info = get_weather(city)
+    
+    # 2. Fetch Google Calendar
+    calendar_events = get_calendar_events_for_day(creds, timezone_name)
+    
+    # 3. Fetch Gmail
+    gmail_emails = get_recent_emails(creds)
+    
+    # 4. Fetch News
+    news_articles = []
+    for interest in interests_list[:3]:
+        articles = search_news(interest)
+        if articles and "articles" in articles:
+            news_articles.append({
+                "topic": interest,
+                "articles": articles["articles"][:3]
+            })
+            
+    # 5. Call Groq
+    digest = generate_groq_digest(city, weather_info, calendar_events, gmail_emails, news_articles, req.focus_today)
+    
+    return digest
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "time": datetime.now().isoformat()}
+    return {"status": "ok", "time": datetime.datetime.now().isoformat()}
 
+# ── Scheduler ──────────────────────────────────────────────────────────────────
 
+scheduler = BackgroundScheduler()
 
+def check_and_send_daily_digests():
+    users = get_all_users()
+    for user in users:
+        if not user.get("enabled"):
+            continue
+            
+        email = user.get("email")
+        delivery_time_str = user.get("delivery_time", "07:00")
+        timezone_str = user.get("timezone", "Asia/Kolkata")
+        
+        try:
+            tz = pytz.timezone(timezone_str)
+            now = datetime.datetime.now(tz)
+        except Exception:
+            now = datetime.datetime.now()
+            
+        current_time_str = now.strftime("%H:%M")
+        
+        if current_time_str == delivery_time_str:
+            print(f"[Scheduler] Triggering morning newspaper email for {email} at local time {current_time_str}")
+            try:
+                generate_and_send_digest_email_sync(email)
+            except Exception as e:
+                print(f"[Scheduler] Error sending daily digest to {email}: {e}")
 
+@app.on_event("startup")
+def startup_event():
+    init_db()
+    # Check every minute on the 0th second
+    scheduler.add_job(check_and_send_daily_digests, "cron", second="0")
+    scheduler.start()
+    print("Background scheduler started successfully.")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
 
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
